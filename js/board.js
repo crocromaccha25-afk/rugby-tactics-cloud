@@ -564,3 +564,33 @@ function currentPlayersForRoster(){
   // リサイズ時に再描画
   window.addEventListener('resize', render);
   })(); // ← IIFE はここで閉じる（名簿も含めて中に入っていること）
+  // タッチをマウスイベントに変換するユーティリティ
+function touchHandler(event) {
+  const touches = event.changedTouches;
+  if (touches.length > 0) {
+    const touch = touches[0];
+
+    // タッチ → マウスイベント名に変換
+    let type = "";
+    if (event.type === "touchstart") type = "mousedown";
+    if (event.type === "touchmove")  type = "mousemove";
+    if (event.type === "touchend")   type = "mouseup";
+
+    if (type) {
+      const simulatedEvent = new MouseEvent(type, {
+        bubbles: true,
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      touch.target.dispatchEvent(simulatedEvent);
+    }
+
+    // スクロールを無効化（描画優先）
+    event.preventDefault();
+  }
+}
+
+// イベント登録
+canvas.addEventListener("touchstart", touchHandler, { passive: false });
+canvas.addEventListener("touchmove",  touchHandler, { passive: false });
+canvas.addEventListener("touchend",   touchHandler, { passive: false });

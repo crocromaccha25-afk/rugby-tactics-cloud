@@ -42,3 +42,44 @@ canvas#board { background: #0b7a3b; border-radius: 6px; }
   display: inline-block;
 }
 .role-text { opacity: .85; font-weight: 600; letter-spacing: .02em; }
+/* スマホ画面（横幅600px以下）用 */
+@media (max-width: 600px) {
+  body {
+    font-size: 14px; /* 全体の文字を少し小さめに */
+  }
+
+  header h1 {
+    font-size: 18px;
+  }
+
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .toolbar select,
+  .toolbar button,
+  .file input {
+    flex: 1 1 auto;
+    min-width: 40%;
+  }
+
+  /* キャンバスを画面幅いっぱいに */
+  #board {
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  /* 名簿表を縦並びにして見やすく */
+  .roster .row {
+    grid-template-columns: 1fr 1fr;
+    font-size: 13px;
+  }
+
+  /* プレーメモ */
+  #notes {
+    width: 100%;
+    font-size: 14px;
+  }
+}
