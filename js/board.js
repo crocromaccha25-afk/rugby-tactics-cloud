@@ -235,7 +235,10 @@ document.getElementById('undoBtn')?.addEventListener('click', undo);
     if (state.side !== 'OPP')  state.allies.filter(filterByView).forEach(drawPlayer);
     if (state.side !== 'ALLY') state.opps  .filter(filterByView).forEach(drawPlayer);
   
-    if (state.view === 'ALL' && state.side !== 'OPP') state.bench.forEach(drawPlayer);
+      // ベンチ描画：味方または両チーム表示のときだけ
+    if (state.view === 'ALL' && state.side !== 'OPP') {
+      state.bench.forEach(drawPlayer);
+    }
     drawBall();
     renderRoster();
   }
@@ -528,38 +531,39 @@ function currentPlayersForRoster(){
   return rows;
 }
 
- function renderRoster(){
-    if (!rosterEl) return;
-    // ヘッダー以外を消す
-    [...rosterEl.querySelectorAll('.row:not(.header)')].forEach(n=>n.remove());
-  
-    const rows = currentPlayersForRoster();
-    rows.forEach((p) => {
-      const row = document.createElement('div');
-      row.className = 'row';
-     row.innerHTML = `
-      <span>
-        <span class="role-badge">
-          <span class="marker" style="--c:${p.color}">${p.no ?? ''}</span>
-          <span class="role-text">${p.role}</span>
-        </span>
+function renderRoster(){
+  if (!rosterEl) return;
+
+  // 味方のみ、番号順。12人制なら既存resetで 6,7,8 が除外済み。
+  const rows = state.allies
+    .slice()
+    .sort((a,b)=> (a.no ?? 999) - (b.no ?? 999));
+
+  // 中身を作り直し
+  rosterEl.innerHTML = '';
+  rows.forEach((p) => {
+    const item = document.createElement('div');
+    item.className = 'item';
+
+    const isWhite = /#fff/i.test(p.color) || p.color === 'white';
+
+    item.innerHTML = `
+      <span class="marker ${isWhite ? 'is-white' : ''}" style="--color:${p.color}">
+        ${p.no ?? ''}
       </span>
-      <input type="text" value="${p.name ?? ''}" placeholder="選手名を入力" />
-      `;
-      const input = row.querySelector('input');
-      input.addEventListener('input', () => {
-        // 元配列を更新
-        const list =
-          p.side === 'ALLY' ? state.allies :
-          p.side === 'OPP'  ? state.opps   :
-          state.bench;
-        // 同一選手を特定（no/role/座標）
-        const i = list.findIndex(x => x.no === p.no && x.role === p.role && x.x === p.x && x.y === p.y);
-        if (i >= 0) list[i].name = input.value.trim();
-      });
-      rosterEl.appendChild(row);
+      <input type="text" value="${p.name ?? ''}" placeholder="選手名" />
+    `;
+
+    const input = item.querySelector('input');
+    input.addEventListener('input', () => {
+      // 同一選手を番号で同定（番号がユニーク前提。必要なら x/y も見る）
+      const i = state.allies.findIndex(x => x.no === p.no);
+      if (i >= 0) state.allies[i].name = input.value.trim();
     });
- }
+
+    rosterEl.appendChild(item);
+  });
+}
  
   // リサイズ時に再描画
   window.addEventListener('resize', render);

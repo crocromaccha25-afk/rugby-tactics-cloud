@@ -49,11 +49,15 @@
 
   <!-- アプリ本体ビュー -->
   <main id="appView" class="layout" style="display:none;">
-    <aside>
-      <h2>プレー一覧</h2>
-      <div id="teamInfoApp" class="muted"></div>
-      <ul id="playList" class="list"></ul>
-    </aside>
+   <!-- 名簿（横に並ぶカード状のグリッド） -->
+    <div id="roster" class="roster-grid"></div>
+
+  <!-- ここにプレー一覧を移動 -->
+  <section class="plays-under-roster">
+    <h2>プレー一覧</h2>
+    <div id="teamInfoApp" class="muted"></div>
+    <ul id="playList" class="list"></ul>
+  </section>
 
     <section class="board-section">
       <!-- 既存のツールバー（保存/複製/削除/Export など）の近くに置く -->
