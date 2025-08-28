@@ -91,6 +91,17 @@
         </label>
       </div>
 
+      <!-- JSがここに行追加 -->
+      </div>
+
+      <style>
+        .roster{ margin-top:12px; display:grid; gap:6px; }
+        .roster .row{ display:grid; grid-template-columns:64px 72px 1fr; gap:8px; align-items:center; }
+        .roster .header{ font-weight:bold; opacity:.8; }
+        .roster input{ padding:6px 8px; border:1px solid #ccc; border-radius:6px; }
+        .role-badge{ font-size:12px; padding:2px 6px; border-radius:999px; background:#eee; }
+      </style>
+
       <!-- この <canvas> を board.js が描画＆ドラッグ処理します -->
       <canvas id="board" width="900" height="520" aria-label="戦術ボード"></canvas>
 
@@ -101,22 +112,29 @@
        <button id="undoBtn" type="button">戻る</button>  <!-- ★追加 -->
       </div>
       
+      <div class="play-title" style="margin:12px 0;">
+        <label>プレー名:
+          <input id="playTitle" type="text" placeholder="プレー名を入力" />
+        </label>
+      </div>
+
       <article class="notes">
         <h3>説明メモ</h3>
         <textarea id="notes" placeholder="役割分担やポイントを書いてね"></textarea>
       </article>
 
-      <div class="row" style="margin-top:8px;">
-        <button id="newPlayBtn2" type="button">＋ 新規プレー</button>
+      <!-- いちばん下に置く（他の #roster は消す） -->
+      <div id="roster" class="roster">
+        <div class="row header">
+          <span>役割 / 番号</span><span>名前（クリックで編集）</span>
+        </div>
       </div>
+
     </section>
   </main>
 
   <!-- コア（ローカルのJS） -->
   <script src="js/board.js"></script>
-
-  <!-- Firebase（CDNモジュール）アプリ本体 -->
-<script src="js/board.js"></script>
-<script type="module" src="js/app_cloud.js"></script>
+  <script type="module" src="js/app_cloud.js"></script>
 </body>
 </html>

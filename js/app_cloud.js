@@ -367,5 +367,17 @@ importFile?.addEventListener('change', safeClick(async ()=>{
   window.BoardAPI?.setState(data);
 }));
 
+function loadPlay(docData){
+  titleInput.value = docData.title || '';
+  notesInput.value = docData.notes || '';
+  if (docData.board) window.BoardAPI.setState(docData.board);
+}
+
+function prepareNewPlay(){
+  titleInput.value = '';
+  notesInput.value = '';
+  window.BoardAPI.reset(15);
+}
+
 // 初期表示は未ログイン想定
 showAuthView();

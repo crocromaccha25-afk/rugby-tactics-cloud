@@ -35,7 +35,7 @@
   function invX(px){ return px / canvas.width; }
   function invY(py){ return py / canvas.height; }
 
-// 画面座標 -> キャンバス実ピクセル & 正規化(0..1)
+ // 画面座標 -> キャンバス実ピクセル & 正規化(0..1)
 function getPointer(e){
   const r  = canvas.getBoundingClientRect();
   // CSS上の座標 → キャンバス実ピクセル
@@ -235,9 +235,9 @@ document.getElementById('undoBtn')?.addEventListener('click', undo);
     if (state.side !== 'OPP')  state.allies.filter(filterByView).forEach(drawPlayer);
     if (state.side !== 'ALLY') state.opps  .filter(filterByView).forEach(drawPlayer);
   
-    state.bench.forEach(drawPlayer);
-
+    if (state.view === 'ALL' && state.side !== 'OPP') state.bench.forEach(drawPlayer);
     drawBall();
+    renderRoster();
   }
 
   // ===== ヒットテスト =====
@@ -340,8 +340,10 @@ if (unit === 15){
   function makeOpponents(unit){
     const PURPLE = '#8e44ad';
     return makeAllies(unit)
-      .filter(p => p.role !== 'BENCH')
-      .map(p => ({ x: 1 - p.x, y: p.y, role:'OPP', no:p.no, color:PURPLE }));
+    .filter(p => p.role !== 'BENCH')
+    
+    // role（FW/BK）は維持したまま、色と左右反転だけ変える
+    .map(p => ({ x: 1 - p.x, y: p.y, role: p.role, no: p.no, color: PURPLE }));
   }
 
   function reset(unit = state.unit){
@@ -401,26 +403,45 @@ if (unit === 15){
 canvas.addEventListener('mousemove', (e) => {
   const {px, py, nx, ny} = getPointer(e);
 
+  // 矢印描画中
   if (state.drawingArrow){
-    state.drawingArrow.now = { x:nx, y:ny };   // ★正規化で保存
+    state.drawingArrow.now = { x:nx, y:ny };
     render(); return;
   }
+  // ボールドラッグ中
   if (state.draggingBall){
-    state.ball = { x:nx, y:ny };               // ★正規化で保存
+    state.ball = { x:nx, y:ny };
     render(); return;
   }
-  if (state.dragging!=null){
-    const list = state.dragging.side==='ALLY' ? state.allies : state.opps;
+  // プレイヤードラッグ中（ALLY / OPP / BENCH）
+  if (state.dragging != null){
+    const list =
+      state.dragging.side === 'ALLY' ? state.allies :
+      state.dragging.side === 'OPP'  ? state.opps   :
+      state.bench;
     const p = list[state.dragging.idx];
-    p.x = nx; p.y = ny;                         // ★正規化で保存
+    p.x = nx; p.y = ny;
     render(); return;
   }
 
-  // ホバー判定（ピクセルでOK）
+  // ---- ホバー判定（ここは関数の中）----
   let h = null;
-  const allyFilter = p => state.view==='ALL' ? true : p.role===state.view;
-  if (state.side!=='OPP'){ const i=hit(state.allies, px, py, allyFilter); if (i!=null) h={side:'ALLY', idx:i}; }
-  if (!h && state.side!=='ALLY'){ const i=hit(state.opps, px, py, allyFilter); if (i!=null) h={side:'OPP', idx:i}; }
+  const viewFilter = p => state.view === 'ALL' ? true : p.role === state.view;
+
+  if (state.side !== 'OPP'){
+    const i = hit(state.allies, px, py, viewFilter);
+    if (i != null) h = { side:'ALLY', idx:i };
+  }
+  if (!h && state.side !== 'ALLY'){
+    const i = hit(state.opps, px, py, viewFilter);
+    if (i != null) h = { side:'OPP', idx:i };
+  }
+  // ベンチは ALL の時だけ触れる
+  if (!h && state.view === 'ALL'){
+    const i = hit(state.bench, px, py);
+    if (i != null) h = { side:'BENCH', idx:i };
+  }
+
   state.hover = h;
   canvas.style.cursor = h ? 'grab' : 'default';
   render();
@@ -462,25 +483,6 @@ canvas.addEventListener('mouseup', (e) => {
   }
 });
 
-  canvas.addEventListener('mousedown', (e)=>{
-     const {px, py, nx, ny} = getPointer(e);
-    if (state.tool === 'arrow'){
-      state.drawingArrow = { start:{x:invX(px), y:invY(py)}, now:{x:invX(px), y:invY(py)} };
-      render(); return;
-    }
-    if (state.tool==='ball' && hitBall(px,py)){ state.draggingBall = true; render(); return; }
-    if (state.hover){ state.dragging = state.hover; render(); }
-  });
-
-  canvas.addEventListener('mouseup', ()=>{
-    if (state.dragging){ state.dragging = null; render(); return; }
-    if (state.draggingBall){ state.draggingBall = false; render(); return; }
-    if (state.drawingArrow){
-      state.arrows.push({ from: state.drawingArrow.start, to: state.drawingArrow.now });
-      state.drawingArrow = null; render(); return;
-    }
-  });
-
   // ★ ダブルクリック：番号だけ編集（名前は無し）
   canvas.addEventListener('dblclick', (e)=>{
     const px = e.offsetX, py = e.offsetY;
@@ -504,10 +506,61 @@ canvas.addEventListener('mouseup', (e) => {
     window.BoardAPI.setSide(e.target.value);
   });
 
+  // === 名簿UI ===（IIFEの“中”に置く）========================
+  const rosterEl = document.getElementById('roster');
+
   // 初期表示
   reset(15);
 
+function currentPlayersForRoster(){
+  const viewFilter = p => state.view === 'ALL' ? true : p.role === state.view;
+
+  // 味方のみ
+  let rows = state.allies.filter(viewFilter).map(p => ({...p, side:'ALLY'}));
+
+  // ベンチは「全員表示」かつ「相手のみでない」時だけ足す
+  if (state.view === 'ALL' && state.side !== 'OPP'){
+    rows = rows.concat(state.bench.map(p => ({...p, side:'BENCH'})));
+  }
+
+  // 番号昇順
+  rows.sort((a,b)=> (a.no??999)-(b.no??999));
+  return rows;
+}
+
+ function renderRoster(){
+    if (!rosterEl) return;
+    // ヘッダー以外を消す
+    [...rosterEl.querySelectorAll('.row:not(.header)')].forEach(n=>n.remove());
+  
+    const rows = currentPlayersForRoster();
+    rows.forEach((p) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+     row.innerHTML = `
+      <span>
+        <span class="role-badge">
+          <span class="marker" style="--c:${p.color}">${p.no ?? ''}</span>
+          <span class="role-text">${p.role}</span>
+        </span>
+      </span>
+      <input type="text" value="${p.name ?? ''}" placeholder="選手名を入力" />
+      `;
+      const input = row.querySelector('input');
+      input.addEventListener('input', () => {
+        // 元配列を更新
+        const list =
+          p.side === 'ALLY' ? state.allies :
+          p.side === 'OPP'  ? state.opps   :
+          state.bench;
+        // 同一選手を特定（no/role/座標）
+        const i = list.findIndex(x => x.no === p.no && x.role === p.role && x.x === p.x && x.y === p.y);
+        if (i >= 0) list[i].name = input.value.trim();
+      });
+      rosterEl.appendChild(row);
+    });
+ }
+ 
   // リサイズ時に再描画
   window.addEventListener('resize', render);
-})();
-
+  })(); // ← IIFE はここで閉じる（名簿も含めて中に入っていること）
