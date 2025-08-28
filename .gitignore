@@ -1,0 +1,17 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# 依存物（使っていれば）
+node_modules/
+
+# ビルド生成物（使っていれば）
+dist/
+build/
+
+# Logs / temp
+*.log
+
+# env（使っていれば）
+.env

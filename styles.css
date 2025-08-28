@@ -1,0 +1,25 @@
+:root { --bg:#0f1420; --panel:#1b2435; --muted:#8aa0b2; --accent:#69c; }
+* { box-sizing: border-box; }
+body { margin:0; color:#e8f0f7; background:var(--bg); font-family:system-ui,-apple-system,"Segoe UI",Roboto;}
+header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#0b1020; border-bottom:1px solid #223046; }
+h1 { margin:0; font-size:18px; }
+.layout { display:grid; grid-template-columns:320px 1fr; gap:16px; padding:16px; }
+.layout-auth { display:block; max-width:920px; margin:0 auto; }
+.card { background:var(--panel); border:1px solid #2a3b53; border-radius:12px; padding:16px; margin-bottom:16px;}
+.row { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+input, select, textarea, button { font:inherit; }
+input, select, textarea { width:100%; padding:10px 12px; color:#e8f0f7; background:#0f1a2a; border:1px solid #2a3b53; border-radius:8px; }
+button { padding:10px 14px; background:#20314a; border:1px solid #2a3b53; color:#e8f0f7; border-radius:8px; cursor:pointer; }
+button:hover { background:#29405f; }
+.badge { padding:6px 10px; border:1px solid #2a3b53; border-radius:999px; background:#162238; }
+.muted { color:var(--muted); margin-top:8px; }
+.list { list-style:none; margin:8px 0 0; padding:0; max-height:520px; overflow:auto; }
+.list li { padding:8px 10px; margin:0 0 6px; background:#162238; border:1px solid #2a3b53; border-radius:8px; cursor:pointer; display:flex; justify-content:space-between; gap:8px;}
+.list li.active { outline:2px solid var(--accent); }
+.board-section { background:var(--panel); border:1px solid #2a3b53; border-radius:12px; padding:16px; }
+.toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+canvas { width:100%; height:580px; background:#113; border:1px solid #2a3b53; border-radius:12px; display:block;}
+.notes textarea { width:100%; height:100px; }
+.file input { display:inline-block; }
+.controls button.active { outline: 2px solid #60a5fa; }
+canvas#board { background: #0b7a3b; border-radius: 6px; }

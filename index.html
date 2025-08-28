@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>戦術ノート（クラウド版）</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>戦術ノート（クラウド版）</h1>
+    <nav>
+      <span id="userBadge" class="badge"></span>
+      <button id="signOutBtn" type="button" style="display:none;">サインアウト</button>
+    </nav>
+  </header>
+
+  <!-- 認証＆チーム作成/参加ビュー -->
+  <main id="authView" class="layout layout-auth">
+    <section class="card">
+      <h2>ログイン / 新規登録</h2>
+      <label>メール<br>
+        <input id="email" type="email" placeholder="you@example.com">
+      </label>
+      <label>パスワード<br>
+        <input id="password" type="password" placeholder="********">
+      </label>
+      <div class="row">
+        <button id="signInBtn"  type="button">ログイン</button>
+        <button id="signUpBtn"  type="button">新規登録</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>チームに参加 / 作成</h3>
+      <label>チーム招待コード（既存チームに参加）<br>
+        <input id="joinCode" placeholder="例: nago-rugby-2025">
+      </label>
+      <div class="row"><button id="joinTeamBtn" type="button">参加する</button></div>
+
+      <label>新規チーム名（作成）<br>
+        <input id="newTeamName" placeholder="例: 愛知医科大ラグビー部">
+      </label>
+      <div class="row"><button id="createTeamBtn" type="button">チームを作成</button></div>
+
+      <div id="teamInfo" class="muted">チーム未所属（作成 or 招待コードで参加）</div>
+    </section>
+  </main>
+
+  <!-- アプリ本体ビュー -->
+  <main id="appView" class="layout" style="display:none;">
+    <aside>
+      <h2>プレー一覧</h2>
+      <div id="teamInfoApp" class="muted"></div>
+      <ul id="playList" class="list"></ul>
+    </aside>
+
+    <section class="board-section">
+      <!-- 既存のツールバー（保存/複製/削除/Export など）の近くに置く -->
+      <div class="toolbar">
+        <!-- 人数切替 -->
+        <select id="unitSelect">
+          <option value="15">15人制</option>
+          <option value="12">12人制</option>
+        </select>
+
+        <!-- 既存ツールバーや保存ボタンの近く -->
+        <select id="sideSelect">
+          <option value="BOTH">両チーム</option>
+          <option value="ALLY">自チームのみ</option>
+          <option value="OPP">相手のみ</option>
+        </select>
+
+        <!-- 表示切替：全員 / FW / BK -->
+        <select id="groupSelect">
+          <option value="ALL">全員</option>
+          <option value="FW">FW</option>
+          <option value="BK">BK</option>
+          <option value="BENCH">BENCH</option> <!-- 追加 -->
+        </select>
+
+        <!-- 初期配置に戻す -->
+        <button id="resetPositions" type="button">初期配置に戻す</button>
+        <button id="newPlayBtn" type="button">新規</button>
+        <button id="saveBtn" type="button">保存</button>
+        <button id="duplicateBtn" type="button">複製</button>
+        <button id="deleteBtn" type="button">削除</button>
+        <button id="exportBtn" type="button">Export</button>
+        <label class="file">
+          <input id="importFile" type="file" accept="application/json"> ファイルの選択
+        </label>
+      </div>
+
+      <!-- この <canvas> を board.js が描画＆ドラッグ処理します -->
+      <canvas id="board" width="900" height="520" aria-label="戦術ボード"></canvas>
+
+      <div class="controls">
+       <button data-tool="move" class="active">移動</button>
+       <button data-tool="arrow">矢印</button>
+       <button data-tool="ball">ボール</button>   <!-- 追加 -->
+       <button id="undoBtn" type="button">戻る</button>  <!-- ★追加 -->
+      </div>
+      
+      <article class="notes">
+        <h3>説明メモ</h3>
+        <textarea id="notes" placeholder="役割分担やポイントを書いてね"></textarea>
+      </article>
+
+      <div class="row" style="margin-top:8px;">
+        <button id="newPlayBtn2" type="button">＋ 新規プレー</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- コア（ローカルのJS） -->
+  <script src="js/board.js"></script>
+
+  <!-- Firebase（CDNモジュール）アプリ本体 -->
+<script src="js/board.js"></script>
+<script type="module" src="js/app_cloud.js"></script>
+</body>
+</html>
