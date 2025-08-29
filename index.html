@@ -32,6 +32,12 @@
   </div>
 </header>
 
+  <!-- 認証画面用のチーム情報表示 -->
+  <div id="teamInfo"></div>
+
+  <!-- アプリ画面用のチーム情報表示 -->
+  <div class="muted" id="teamInfoAppNote"></div> <!-- 使わないなら丸ごと削除でもOK -->
+
   <!-- ▼プレー一覧ドック：ヘッダー直下に固定配置 -->
 <section id="playsDock" class="plays-dock">
   <div class="dock-row">
@@ -181,6 +187,11 @@
 
   <!-- コア（ローカルのJS） -->
   <script src="js/board.js"></script>
-  <script type="module" src="js/app_cloud.js"></script>
+
+<!-- どこでもOK。表示しない -->
+<div id="playList" style="display:none"></div>
+
+<script type="module" src="js/app_cloud.js"></script>
 </body>
 </html>
+

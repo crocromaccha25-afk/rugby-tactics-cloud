@@ -36,7 +36,6 @@ const createTeamBtn= document.getElementById('createTeamBtn');
 const teamInfoAuth = document.getElementById('teamInfo');
 const teamInfoApp  = document.getElementById('teamInfoApp');
 
-const playListEl   = document.getElementById('playList');
 const titleEl      = document.getElementById('playTitle');
 const notesEl      = document.getElementById('notes');
 const unitEl       = document.getElementById('unitSelect');   // 15人 / 12人
@@ -109,10 +108,66 @@ function openTeamSetupModal() {
   document.body.appendChild(el);
 
   // 既存の join/create ロジックをそのまま呼ぶ
-  el.querySelector('#modalJoinBtn').addEventListener('click', safeClick(async ()=>{
-    const code = (el.querySelector('#modalJoinCode').value || '').trim();
+  // 既存 el.innerHTML の直後あたりにある addEventListener を↓に差し替え
+const modalCreateBtn = el.querySelector('#modalCreateBtn');
+const modalTeamName  = el.querySelector('#modalTeamName');
+const modalJoinBtn   = el.querySelector('#modalJoinBtn');
+const modalJoinCode  = el.querySelector('#modalJoinCode');
+
+// 多重クリック防止用のフラグ
+let creating = false;
+let joining  = false;
+
+modalCreateBtn.addEventListener('click', safeClick(async () => {
+  if (creating) return;
+  creating = true;
+  modalCreateBtn.disabled = true;
+
+  try {
+    if (!currentUser) throw new Error('ログインが必要です（再読み込みしてやり直してください）');
+
+    const name = (modalTeamName.value || '').trim();
+    if (!name) throw new Error('チーム名を入力してください');
+
+    const code = name.toLowerCase().replace(/\s+/g, '-') + '-' + Math.random().toString(36).slice(2, 6);
+
+    const ref = await addDoc(collection(db,'teams'), {
+      name,
+      joinCode: code,
+      owner: currentUser.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    currentTeam = { id: ref.id, name, joinCode: code };
+    await updateDoc(doc(db,'profiles', currentUser.uid), { teamId: currentTeam.id });
+
+    setTeamInfo(`チーム：${currentTeam.name} 招待コード：${currentTeam.joinCode}`);
+    subscribePlays(currentTeam.id);
+
+    const joinCodeBadge = document.getElementById('joinCodeBadge');
+    if (joinCodeBadge) joinCodeBadge.textContent = `招待: ${currentTeam.joinCode}`;
+
+    closeTeamSetupModal();
+    alert('チームを作成しました');
+  } catch (err) {
+    // ここでエラーの中身をしっかり表示
+    alert('チーム作成エラー: ' + (err?.message || err));
+    console.error(err);
+  } finally {
+    creating = false;
+    modalCreateBtn.disabled = false;
+  }
+}));
+
+modalJoinBtn.addEventListener('click', safeClick(async ()=> {
+  if (joining) return;
+  joining = true;
+  modalJoinBtn.disabled = true;
+
+  try {
+    const code = (modalJoinCode.value || '').trim();
     if (!code) throw new Error('招待コードを入力してください');
-    // 招待コード検索
     const qy = query(collection(db, 'teams'), where('joinCode', '==', code));
     const qs = await getDocs(qy);
     if (qs.empty) throw new Error('招待コードが見つかりません');
@@ -126,26 +181,15 @@ function openTeamSetupModal() {
     if (joinCodeBadge) joinCodeBadge.textContent = `招待: ${currentTeam.joinCode}`;
     closeTeamSetupModal();
     alert('参加しました！');
-  }));
+  } catch (err) {
+    alert('参加エラー: ' + (err?.message || err));
+    console.error(err);
+  } finally {
+    joining = false;
+    modalJoinBtn.disabled = false;
+  }
+}));
 
-  el.querySelector('#modalCreateBtn').addEventListener('click', safeClick(async ()=>{
-    const name = (el.querySelector('#modalTeamName').value || '').trim();
-    if (!name) throw new Error('チーム名を入力してください');
-    const code = name.toLowerCase().replace(/\s+/g, '-') + '-' + Math.random().toString(36).slice(2, 6);
-    const ref = await addDoc(collection(db,'teams'), {
-      name, joinCode: code, owner: currentUser.uid,
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
-    });
-    currentTeam = { id: ref.id, name, joinCode: code };
-    await updateDoc(doc(db,'profiles', currentUser.uid), { teamId: currentTeam.id });
-
-    setTeamInfo(`チーム：${currentTeam.name} 招待コード：${currentTeam.joinCode}`);
-    subscribePlays(currentTeam.id);
-    const joinCodeBadge = document.getElementById('joinCodeBadge');
-    if (joinCodeBadge) joinCodeBadge.textContent = `招待: ${currentTeam.joinCode}`;
-    closeTeamSetupModal();
-    alert('チームを作成しました');
-  }));
 }
 
 function closeTeamSetupModal(){
@@ -235,8 +279,17 @@ signInBtn?.addEventListener('click', safeClick(async ()=>{
 }));
 
 signUpBtn?.addEventListener('click', safeClick(async ()=>{
-  await createUserWithEmailAndPassword(auth, emailEl.value, passwordEl.value);
-  // ここで即モーダルを開いてOK（onAuthStateChangedでも安全に重複防止している）
+  const email = emailEl.value.trim();
+  const pw = passwordEl.value.trim();
+
+  // ここで長さチェック
+  if (pw.length < 6) {
+    alert('パスワードは6文字以上にしてください');
+    return;
+  }
+
+  await createUserWithEmailAndPassword(auth, email, pw);
+  // 登録後にチーム作成モーダルを開く
   openTeamSetupModal();
 }));
 
@@ -244,7 +297,7 @@ signOutBtn?.addEventListener('click', safeClick(async ()=>{
   await signOut(auth);
   unsubscribePlays?.(); unsubscribePlays = null;
   currentTeam = null; currentId = null; plays = [];
-  playListEl.innerHTML = ''; titleEl.value=''; notesEl.value='';
+  titleEl.value=''; notesEl.value='';
 }));
 
 onAuthStateChanged(auth, async (user) => {
@@ -368,7 +421,7 @@ createTeamBtn?.addEventListener('click', safeClick(async () => {
 // ===== 一覧購読／描画 =====
 function subscribePlays(teamId){
   if (unsubscribePlays){ unsubscribePlays(); unsubscribePlays=null; }
-  plays = []; playListEl.innerHTML = '';
+  plays = [];
   if (!teamId) return;
 
   const q = query(
@@ -378,7 +431,6 @@ function subscribePlays(teamId){
 unsubscribePlays = onSnapshot(q, (snap) => {
   plays = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   renderList();
-  renderSideLists();
 
   // すでに選択中があればそれを維持、無ければ最新を選択
   if (currentId) {
@@ -445,7 +497,7 @@ function renderSideLists(){
   });
 
   // opponentごとに見出しとULを生成
-  [...map.keys()].sort((a,b)=> a.localeCompare(b)).forEach(name=>{
+   [...map.keys()].sort((a,b)=> a.localeCompare(b, 'ja')).forEach(name=>{
     const section = document.createElement('section');
     const h4 = document.createElement('h4');
     h4.textContent = name;
@@ -649,6 +701,8 @@ duplicateBtn?.addEventListener('click', safeClick(async ()=>{
     unit:  normalizeUnit(src.unit),
     group: src.group || 'FW',
     boardState: src.boardState || {},
+    who: src.who || 'ALLY',
+    opponent: (src.opponent || '').trim(),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   });
