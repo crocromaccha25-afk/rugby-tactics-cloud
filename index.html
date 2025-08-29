@@ -3,139 +3,181 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>戦術ノート（クラウド版）</title>
+  <title>ラグビー戦術ノート（クラウド版）</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header>
-    <h1>戦術ノート（クラウド版）</h1>
-    <nav>
-      <span id="userBadge" class="badge"></span>
-      <button id="signOutBtn" type="button" style="display:none;">サインアウト</button>
-    </nav>
-  </header>
+<header id="appHeader">
+  <div class="header-left">
+    <h1>ラグビー戦術ノート（クラウド版）</h1>
+  </div>
 
-  <!-- 認証＆チーム作成/参加ビュー -->
-  <main id="authView" class="layout layout-auth">
-    <section class="card">
-      <h2>ログイン / 新規登録</h2>
-      <label>メール<br>
-        <input id="email" type="email" placeholder="you@example.com">
-      </label>
-      <label>パスワード<br>
-        <input id="password" type="password" placeholder="********">
-      </label>
-      <div class="row">
-        <button id="signInBtn"  type="button">ログイン</button>
-        <button id="signUpBtn"  type="button">新規登録</button>
-      </div>
-    </section>
+  <div class="filters">
+    <!-- プレイ一覧の絞り込み（ヘッダーに集約） -->
+    <div class="plays-filter">
+      <select id="filterWho" title="自チーム/相手プレー">
+        <option value="ALL">すべて</option>
+        <option value="ALLY">自チーム</option>
+        <option value="OPP">相手</option>
+      </select>
+      <input id="filterOpponent" type="text" placeholder="相手名で絞り込み" />
+      <span id="playsCount" class="muted"></span>
+    </div>
+  </div>
 
-    <section class="card">
-      <h3>チームに参加 / 作成</h3>
-      <label>チーム招待コード（既存チームに参加）<br>
-        <input id="joinCode" placeholder="例: nago-rugby-2025">
-      </label>
-      <div class="row"><button id="joinTeamBtn" type="button">参加する</button></div>
+  <div class="header-right">
+    <span id="joinCodeBadge" class="badge"></span>
+    <span id="userBadge" class="badge"></span>
+    <button id="signOutBtn" type="button" style="display:none;">サインアウト</button>
+  </div>
+</header>
 
-      <label>新規チーム名（作成）<br>
-        <input id="newTeamName" placeholder="例: 愛知医科大ラグビー部">
-      </label>
-      <div class="row"><button id="createTeamBtn" type="button">チームを作成</button></div>
+  <!-- ▼プレー一覧ドック：ヘッダー直下に固定配置 -->
+<section id="playsDock" class="plays-dock">
+  <div class="dock-row">
+    <div class="dock-left">
+      <strong>プレー一覧</strong>
+      <span id="inviteBadge" class="badge" title="チーム招待コード"></span>
+    </div>
+    <div class="dock-right">
+      <input id="playSearch" placeholder="キーワード検索" />
+      <select id="whoFilter">
+        <option value="ALL">すべて</option>
+        <option value="ALLY">自チーム</option>
+        <option value="OPP">相手</option>
+      </select>
+      <select id="opponentFilter">
+        <option value="">相手で絞り込み</option>
+      </select>
+    </div>
+  </div>
 
-      <div id="teamInfo" class="muted">チーム未所属（作成 or 招待コードで参加）</div>
-    </section>
-  </main>
+  <!-- 折りたたみグループ -->
+  <details open id="groupALLY">
+    <summary>自チームのプレー</summary>
+    <ul id="playListALLY" class="list"></ul>
+  </details>
+  <details id="groupOPP">
+    <summary>相手のプレー</summary>
+    <!-- 相手ごとにULを動的生成 -->
+    <div id="oppBuckets"></div>
+  </details>
+</section>
+
+  <!-- 認証ビュー -->
+<main id="authView" class="layout layout-auth">
+  <!-- ▼ここに題名を追加 -->
+  <h1 class="auth-title">ラグビー戦術ノート（クラウド版）</h1>
+
+  <section class="card">
+    <h2>ログイン / 新規登録</h2>
+    <label>メール<br>
+      <input id="email" type="email" placeholder="you@example.com">
+    </label>
+    <label>パスワード<br>
+      <input id="password" type="password" placeholder="********">
+    </label>
+    <div class="row">
+      <button id="signInBtn"  type="button">ログイン</button>
+      <button id="signUpBtn"  type="button">新規登録</button>
+    </div>
+  </section>
+</main>
 
   <!-- アプリ本体ビュー -->
   <main id="appView" class="layout" style="display:none;">
-   <!-- 名簿（横に並ぶカード状のグリッド） -->
+  <!-- 左カラム：名簿 → プレー一覧 -->
+  <aside>
+    <!-- 名簿（横タイル） -->
     <div id="roster" class="roster-grid"></div>
 
-  <!-- ここにプレー一覧を移動 -->
-  <section class="plays-under-roster">
-    <h2>プレー一覧</h2>
-    <div id="teamInfoApp" class="muted"></div>
-    <ul id="playList" class="list"></ul>
-  </section>
+    <!-- プレイ一覧（名簿の下） -->
+    <section class="plays-under-roster">
+  <h2>プレー一覧</h2>
+  <div id="teamInfoApp" class="muted"></div>
 
-    <section class="board-section">
-      <!-- 既存のツールバー（保存/複製/削除/Export など）の近くに置く -->
-      <div class="toolbar">
-        <!-- 人数切替 -->
-        <select id="unitSelect">
-          <option value="15">15人制</option>
-          <option value="12">12人制</option>
-        </select>
+  <!-- 種別/相手入力（そのまま残す） -->
+  <div class="row" id="whoControls" style="margin-top:8px;">
+    <label style="min-width:140px">
+      種別
+      <select id="whoSelect">
+        <option value="ALLY">自チームのプレー</option>
+        <option value="OPP">相手のプレー</option>
+      </select>
+    </label>
+    <label style="flex:1; min-width:200px">
+      相手チーム名（相手のプレーの時だけ）
+      <input id="opponentInput" type="text" placeholder="例: ○○大学A" />
+    </label>
+  </div>
 
-        <!-- 既存ツールバーや保存ボタンの近く -->
-        <select id="sideSelect">
-          <option value="BOTH">両チーム</option>
-          <option value="ALLY">自チームのみ</option>
-          <option value="OPP">相手のみ</option>
-        </select>
-
-        <!-- 表示切替：全員 / FW / BK -->
-        <select id="groupSelect">
-          <option value="ALL">全員</option>
-          <option value="FW">FW</option>
-          <option value="BK">BK</option>
-          <option value="BENCH">BENCH</option> <!-- 追加 -->
-        </select>
-
-        <!-- 初期配置に戻す -->
-        <button id="resetPositions" type="button">初期配置に戻す</button>
-        <button id="newPlayBtn" type="button">新規</button>
-        <button id="saveBtn" type="button">保存</button>
-        <button id="duplicateBtn" type="button">複製</button>
-        <button id="deleteBtn" type="button">削除</button>
-        <button id="exportBtn" type="button">Export</button>
-        <label class="file">
-          <input id="importFile" type="file" accept="application/json"> ファイルの選択
-        </label>
-      </div>
-
-      <!-- JSがここに行追加 -->
-      </div>
-
-      <style>
-        .roster{ margin-top:12px; display:grid; gap:6px; }
-        .roster .row{ display:grid; grid-template-columns:64px 72px 1fr; gap:8px; align-items:center; }
-        .roster .header{ font-weight:bold; opacity:.8; }
-        .roster input{ padding:6px 8px; border:1px solid #ccc; border-radius:6px; }
-        .role-badge{ font-size:12px; padding:2px 6px; border-radius:999px; background:#eee; }
-      </style>
-
-      <!-- この <canvas> を board.js が描画＆ドラッグ処理します -->
-      <canvas id="board" width="900" height="520" aria-label="戦術ボード"></canvas>
-
-      <div class="controls">
-       <button data-tool="move" class="active">移動</button>
-       <button data-tool="arrow">矢印</button>
-       <button data-tool="ball">ボール</button>   <!-- 追加 -->
-       <button id="undoBtn" type="button">戻る</button>  <!-- ★追加 -->
-      </div>
-      
-      <div class="play-title" style="margin:12px 0;">
-        <label>プレー名:
-          <input id="playTitle" type="text" placeholder="プレー名を入力" />
-        </label>
-      </div>
-
-      <article class="notes">
-        <h3>説明メモ</h3>
-        <textarea id="notes" placeholder="役割分担やポイントを書いてね"></textarea>
-      </article>
-
-      <!-- いちばん下に置く（他の #roster は消す） -->
-      <div id="roster" class="roster">
-        <div class="row header">
-          <span>役割 / 番号</span><span>名前（クリックで編集）</span>
-        </div>
-      </div>
-
+  <!-- ▼自チーム / 相手 を横並びで -->
+  <div class="plays-dual">
+    <section>
+      <h3>自チーム</h3>
+      <ul id="playListAlly" class="list"></ul>
     </section>
-  </main>
+    <section>
+      <h3>相手</h3>
+      <ul id="playListOpp" class="list"></ul>
+    </section>
+  </div>
+</section>
+  </aside>
+
+  <!-- 右カラム：ボードとツール群 -->
+  <section class="board-section">
+    <div class="toolbar">
+      <select id="unitSelect">
+        <option value="15">15人制</option>
+        <option value="12">12人制</option>
+      </select>
+
+      <select id="sideSelect">
+        <option value="BOTH">両チーム</option>
+        <option value="ALLY">自チームのみ</option>
+        <option value="OPP">相手のみ</option>
+      </select>
+
+      <select id="groupSelect">
+        <option value="ALL">全員</option>
+        <option value="FW">FW</option>
+        <option value="BK">BK</option>
+      </select>
+
+      <button id="resetPositions" type="button">初期配置に戻す</button>
+      <button id="newPlayBtn"   type="button">新規</button>
+      <button id="saveBtn"      type="button">保存</button>
+      <button id="duplicateBtn" type="button">複製</button>
+      <button id="deleteBtn"    type="button">削除</button>
+      <button id="exportBtn"    type="button">Export</button>
+      <label class="file">
+        <input id="importFile" type="file" accept="application/json"> ファイルの選択
+      </label>
+    </div>
+
+    <!--ラグビー 戦術ボード -->
+    <canvas id="board" width="900" height="520" aria-label="ラグビー戦術ボード"></canvas>
+
+    <div class="controls">
+      <button data-tool="move"  class="active">移動</button>
+      <button data-tool="arrow">矢印</button>
+      <button data-tool="ball">ボール</button>
+      <button id="undoBtn" type="button">戻る</button>
+    </div>
+
+    <div class="play-title" style="margin:12px 0;">
+      <label>プレー名:
+        <input id="playTitle" type="text" placeholder="プレー名を入力" />
+      </label>
+    </div>
+
+    <article class="notes">
+      <h3>説明メモ</h3>
+      <textarea id="notes" placeholder="役割分担やポイントを書いてね"></textarea>
+    </article>
+  </section>
+</main>
 
   <!-- コア（ローカルのJS） -->
   <script src="js/board.js"></script>

@@ -160,18 +160,47 @@ function drawPitch() {
   }
 
   function drawBall(){
-    const {x:bx,y:by} = state.ball;
-    ctx.save();
-    ctx.translate(x(bx), y(by));
-    ctx.rotate(0.35);
-    ctx.fillStyle   = '#f39c12';
-    ctx.strokeStyle = '#222';
-    ctx.lineWidth   = 1.2;
-    ctx.beginPath();
-    ctx.ellipse(0,0, C.BALL_R+6, C.BALL_R, 0, 0, Math.PI*2);
-    ctx.fill(); ctx.stroke();
-    ctx.restore();
-  }
+  const {x:bx,y:by} = state.ball;
+  ctx.save();
+  ctx.translate(x(bx), y(by));
+  ctx.rotate(0.35);
+
+  // 本体
+  ctx.fillStyle   = '#f8f0d8';
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth   = 1.4;
+  ctx.beginPath();
+  ctx.ellipse(0,0, C.BALL_R+8, C.BALL_R, 0, 0, Math.PI*2);
+  ctx.fill(); ctx.stroke();
+
+  // サイドパネル色
+  ctx.strokeStyle = '#c04';
+  ctx.lineWidth   = 2;
+  ctx.beginPath();
+  ctx.ellipse(0,0, C.BALL_R+6, C.BALL_R-2, 0, 0, Math.PI*2);
+  ctx.stroke();
+
+  // 縫い目（中央の短い破線）
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([4,3]);
+  ctx.beginPath();
+  ctx.moveTo(-C.BALL_R-4, 0);
+  ctx.lineTo( C.BALL_R+4, 0);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // うっすら影
+  const grd = ctx.createRadialGradient(-6,-6,2, 0,0, C.BALL_R+10);
+  grd.addColorStop(0, 'rgba(0,0,0,0.10)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.ellipse(0,0, C.BALL_R+8, C.BALL_R, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
+}
 
   // ===== 履歴ユーティリティ =====
 function snapshot(){
@@ -333,10 +362,15 @@ if (unit === 15){
   }
 
   // ベンチ（16〜23）— 下に白で並べる（既存の描画で色白＆番号表示）
-  for (let b = 16; b <= 23; b++){
-    A.push({ x: 0.08 + (b - 16) * 0.04, y: 0.92, role:'BENCH', no: b, color: BENCH });
+  const BENCH_N = (unit === 12) ? 6 : 8;
+  const startNo = unit + 1;        // 12なら13から、15なら16から
+  for (let i = 0; i < BENCH_N; i++){
+    const no = startNo + i;
+    // 画面下に横一列
+    const x = 0.08 + i * 0.04;
+    const y = 0.92;
+    A.push({ x, y, role:'BENCH', no, color: BENCH });
   }
-
   return A;
 }
 
@@ -507,6 +541,9 @@ canvas.addEventListener('mouseup', (e) => {
   // 外部セレクト（index.htmlの#sideSelect等があれば拾う）
   document.getElementById('sideSelect')?.addEventListener('change', (e)=>{
     window.BoardAPI.setSide(e.target.value);
+  document.getElementById('resetPositions')?.addEventListener('click', () => {
+  reset(state.unit); // 今の人数(12/15)を維持したまま初期配置
+  });  
   });
 
   // === 名簿UI ===（IIFEの“中”に置く）========================
@@ -533,68 +570,76 @@ function currentPlayersForRoster(){
 
 function renderRoster(){
   if (!rosterEl) return;
+  rosterEl.innerHTML = ''; // 全消去して再構築
 
-  // 味方のみ、番号順。12人制なら既存resetで 6,7,8 が除外済み。
-  const rows = state.allies
-    .slice()
-    .sort((a,b)=> (a.no ?? 999) - (b.no ?? 999));
-
-  // 中身を作り直し
-  rosterEl.innerHTML = '';
+  const rows = currentPlayersForRoster();
   rows.forEach((p) => {
     const item = document.createElement('div');
     item.className = 'item';
 
-    const isWhite = /#fff/i.test(p.color) || p.color === 'white';
+    // マーカー（番号付き丸）
+    const marker = document.createElement('div');
+    marker.className = 'marker';
+    marker.style.setProperty('--color', p.color);
+    marker.textContent = p.no ?? '';
 
-    item.innerHTML = `
-      <span class="marker ${isWhite ? 'is-white' : ''}" style="--color:${p.color}">
-        ${p.no ?? ''}
-      </span>
-      <input type="text" value="${p.name ?? ''}" placeholder="選手名" />
-    `;
+    // 白いマーカーのときだけ文字色を黒に
+    if (p.color === '#fff' || p.color.toLowerCase()==='white'){
+      marker.classList.add('is-white');
+    }
 
-    const input = item.querySelector('input');
+    // 名前入力欄
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = p.name ?? '';
+    input.placeholder = '選手名';
     input.addEventListener('input', () => {
-      // 同一選手を番号で同定（番号がユニーク前提。必要なら x/y も見る）
-      const i = state.allies.findIndex(x => x.no === p.no);
-      if (i >= 0) state.allies[i].name = input.value.trim();
+      const list =
+        p.side === 'ALLY' ? state.allies :
+        p.side === 'OPP'  ? state.opps   :
+        state.bench;
+      const i = list.findIndex(x => x.no === p.no && x.role === p.role);
+      if (i >= 0) list[i].name = input.value.trim();
     });
 
+    item.appendChild(marker);
+    item.appendChild(input);
     rosterEl.appendChild(item);
   });
 }
  
+// === タッチ→マウス変換（スマホ対応） ===
+function touchHandler(event) {
+  const touches = event.changedTouches;
+  if (!touches || touches.length === 0) return;
+
+  const t = touches[0];
+  let type = "";
+  if (event.type === "touchstart") type = "mousedown";
+  if (event.type === "touchmove")  type = "mousemove";
+  if (event.type === "touchend")   type = "mouseup";
+
+  if (type) {
+    const simulatedEvent = new MouseEvent(type, {
+      bubbles: true,
+      clientX: t.clientX,
+      clientY: t.clientY
+    });
+    // キャンバスへディスパッチ
+    canvas.dispatchEvent(simulatedEvent);
+  }
+
+  // 画面スクロールを抑止（ドラッグ優先）
+  event.preventDefault();
+}
+
+// タッチイベント登録（passive:false で preventDefault を有効化）
+canvas.addEventListener("touchstart", touchHandler, { passive: false });
+canvas.addEventListener("touchmove",  touchHandler, { passive: false });
+canvas.addEventListener("touchend",   touchHandler, { passive: false });
+
+
   // リサイズ時に再描画
   window.addEventListener('resize', render);
   })(); // ← IIFE はここで閉じる（名簿も含めて中に入っていること）
   // タッチをマウスイベントに変換するユーティリティ
-function touchHandler(event) {
-  const touches = event.changedTouches;
-  if (touches.length > 0) {
-    const touch = touches[0];
-
-    // タッチ → マウスイベント名に変換
-    let type = "";
-    if (event.type === "touchstart") type = "mousedown";
-    if (event.type === "touchmove")  type = "mousemove";
-    if (event.type === "touchend")   type = "mouseup";
-
-    if (type) {
-      const simulatedEvent = new MouseEvent(type, {
-        bubbles: true,
-        clientX: touch.clientX,
-        clientY: touch.clientY
-      });
-      touch.target.dispatchEvent(simulatedEvent);
-    }
-
-    // スクロールを無効化（描画優先）
-    event.preventDefault();
-  }
-}
-
-// イベント登録
-canvas.addEventListener("touchstart", touchHandler, { passive: false });
-canvas.addEventListener("touchmove",  touchHandler, { passive: false });
-canvas.addEventListener("touchend",   touchHandler, { passive: false });
