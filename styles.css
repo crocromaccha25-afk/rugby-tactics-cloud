@@ -248,3 +248,8 @@ header { display:flex; align-items:center; gap:12px; padding:12px 16px; }
 @media (max-width: 900px) {
   .plays-dual { grid-template-columns: 1fr; }
 }
+
+/* styles.css に追加 */
+#authView #teamInfo {
+  display: none;
+}
