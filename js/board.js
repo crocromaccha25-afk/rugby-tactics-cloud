@@ -2,6 +2,41 @@
 (() => {
   const canvas = document.getElementById('board');
   const ctx    = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  // 数値をdpr倍するヘルパー
+  const S = (n) => n * dpr;
+  const SD = (arr) => arr.map(S); // 破線用
+
+if ('ResizeObserver' in window) {
+  const ro = new ResizeObserver(() => { fitCanvasToCss(); render(); });
+  ro.observe(canvas.parentElement || canvas);
+}
+
+  // CSS幅に合わせて実ピクセルをセット（高DPI対応）
+  function fitCanvasToCss() {
+  const BASE_W = 900, BASE_H = 520;
+  const ratio = BASE_W / BASE_H;
+
+  const parent = canvas.parentElement || document.body;
+  const cs = getComputedStyle(parent);
+  // 内容幅 = clientWidth - 左右padding
+  const contentW = parent.clientWidth
+    - parseFloat(cs.paddingLeft || 0)
+    - parseFloat(cs.paddingRight || 0);
+
+  const cssW = Math.min(contentW, BASE_W);
+  const cssH = Math.round(cssW / ratio);
+
+  // CSS 表示サイズ
+  canvas.style.width  = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+
+  // 実ピクセル（高DPI）
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+}
+
 
   // ===== 状態 =====
   const state = {
@@ -23,10 +58,10 @@
 
   // ===== 定数（ピクセル半径は描画専用）=====
   const C = {
-    PLAYER_R: 12,
-    HIT_R:    14,
-    BALL_R:   10,
-    MARGIN:   24,
+  PLAYER_R: S(14),   // マーカー半径（見やすく +dpr）
+  HIT_R:    S(18),   // 当たり判定も連動
+  BALL_R:   S(12),   // ボールも少し大きめ
+  MARGIN:   S(24),   // コート外枠の余白
   };
 
   // ===== 正規化 <-> ピクセル 変換 =====
@@ -47,119 +82,155 @@ function getPointer(e){
   return { px, py, nx, ny };
 }
 
-  // ===== ピッチ描画 =====
-  // ===== コート描画（実寸比） =====
+// 90°回転したゴール「H」アイコン（サイズはピッチ高さ比）
+function drawGoalIcon(X, Y, pitchH, side /* 'L' | 'R' */){
+  // 見た目サイズ（ピッチ高さに対する比率で自動スケール）
+  const w  = pitchH * 0.14;  // 元のHの横幅（回転前想定）
+  const h  = pitchH * 0.08;  // 元のHの高さ
+  const lw = S(7);           // 線の太さ（dpr対応）
+
+  // 配置位置：インゴールの中ほどに置く
+  // 120m 系のX座標系：左=0, 右=120。ゴールラインは 10 / 110
+  // 少しデッドボールライン寄りにオフセットして見やすく
+  const mx = (side === 'L') ? 7 : 113;
+  const cx = X(mx);
+  const cy = Y(70 / 2);
+
+  // 中心に描いてから 90°回転させる
+  const halfW = w / 2, halfH = h / 2;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(Math.PI / 2); // ★90度回転
+  ctx.lineWidth   = lw;
+  ctx.strokeStyle = '#fff';
+  ctx.lineCap     = 'butt';
+
+  ctx.beginPath();
+  // 左縦棒
+  ctx.moveTo(-halfW, -halfH);
+  ctx.lineTo(-halfW,  halfH);
+  // 右縦棒
+  ctx.moveTo( halfW, -halfH);
+  ctx.lineTo( halfW,  halfH);
+  // クロスバー
+  ctx.moveTo(-halfW, 0);
+  ctx.lineTo( halfW, 0);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ===== コート描画（実寸比）=====
 function drawPitch() {
   const w = canvas.width, h = canvas.height, m = C.MARGIN;
   const L = { left: m, right: w - m, top: m, bottom: h - m };
   const pitchW = L.right - L.left, pitchH = L.bottom - L.top;
 
   // 実寸（m）
-  const DIM = {
-    LEN: 100,         // ゴールライン〜ゴールライン
-    WID: 70,          // 幅
-    IN: 10            // インゴール（片側）
-  };
+  const DIM = { LEN: 100, WID: 70, IN: 10 };
   const TOTAL_X = DIM.LEN + DIM.IN * 2; // 120m
   const TOTAL_Y = DIM.WID;              // 70m
 
-  // 変換: メートル -> キャンバス座標
-  const X = (mx) => L.left  + (mx / TOTAL_X) * pitchW;
-  const Y = (my) => L.top   + (my / TOTAL_Y) * pitchH;
+  // メートル -> キャンバス変換
+  const X = (mx) => L.left + (mx / TOTAL_X) * pitchW;
+  const Y = (my) => L.top  + (my / TOTAL_Y) * pitchH;
 
   // 背景（芝）
   ctx.fillStyle = '#238d23';
   ctx.fillRect(L.left, L.top, pitchW, pitchH);
-  // 縞（芝の陰影）
+
+  // 芝の縞
   for (let i = 0; i < 8; i++) {
     ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)';
     ctx.fillRect(L.left + (pitchW / 8) * i, L.top, pitchW / 8, pitchH);
   }
 
-  // 共通線スタイル
+  // 線のスタイル
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = S(3);
+  ctx.setLineDash([]); // まず実線に
 
-  // 小ヘルパー
-  const line = (x1,y1,x2,y2) => { ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); };
-  const dash = (x1,y1,x2,y2) => { ctx.save(); ctx.setLineDash([10,7]); line(x1,y1,x2,y2); ctx.restore(); };
-  const thick = (x1,y1,x2,y2,w) => { ctx.save(); const lw=ctx.lineWidth; ctx.lineWidth=w; line(x1,y1,x2,y2); ctx.lineWidth=lw; ctx.restore(); };
-
-  // ===== 外枠（タッチ & デッドボール）=====
+  // 外枠
   ctx.strokeRect(L.left, L.top, pitchW, pitchH);
 
-  // ===== 縦方向（長辺方向の線）=====
-  // ゴールライン（インゴール10m内側）
-  line(X(DIM.IN),      Y(0), X(DIM.IN),      Y(DIM.WID));
-  line(X(DIM.IN+DIM.LEN), Y(0), X(DIM.IN+DIM.LEN), Y(DIM.WID));
+  // ===== 縦方向（ゴール/ハーフ/22m/10m/5m）=====
+  const line = (x1,y1,x2,y2)=>{ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); };
+  const dash = (x1,y1,x2,y2)=>{ ctx.save(); ctx.setLineDash(SD([10,7])); line(x1,y1,x2,y2); ctx.restore(); };
+  const thick= (x1,y1,x2,y2,w)=>{ ctx.save(); const lw=ctx.lineWidth; ctx.lineWidth=w; line(x1,y1,x2,y2); ctx.lineWidth=lw; ctx.restore(); };
 
-  // ハーフ
+  // ゴールライン（インゴール10m内側）→太め実線
+  thick(X(DIM.IN),           Y(0), X(DIM.IN),           Y(DIM.WID), S(3));
+  thick(X(DIM.IN + DIM.LEN), Y(0), X(DIM.IN + DIM.LEN), Y(DIM.WID), S(3));
+
+  // ハーフ（実線）
   line(X(DIM.IN + DIM.LEN/2), Y(0), X(DIM.IN + DIM.LEN/2), Y(DIM.WID));
 
-  // 22m
-  line(X(DIM.IN + 22),         Y(0), X(DIM.IN + 22),         Y(DIM.WID));
-  line(X(DIM.IN + DIM.LEN-22), Y(0), X(DIM.IN + DIM.LEN-22), Y(DIM.WID));
+  // 22m（実線）
+  line(X(DIM.IN + 22),              Y(0), X(DIM.IN + 22),              Y(DIM.WID));
+  line(X(DIM.IN + DIM.LEN - 22),    Y(0), X(DIM.IN + DIM.LEN - 22),    Y(DIM.WID));
 
-  // 10m（ハーフから±10）
-  line(X(DIM.IN + DIM.LEN/2 - 10), Y(0), X(DIM.IN + DIM.LEN/2 - 10), Y(DIM.WID));
-  line(X(DIM.IN + DIM.LEN/2 + 10), Y(0), X(DIM.IN + DIM.LEN/2 + 10), Y(DIM.WID));
+  // 10m（破線）
+  dash(X(DIM.IN + DIM.LEN/2 - 10),  Y(0), X(DIM.IN + DIM.LEN/2 - 10),  Y(DIM.WID));
+  dash(X(DIM.IN + DIM.LEN/2 + 10),  Y(0), X(DIM.IN + DIM.LEN/2 + 10),  Y(DIM.WID));
 
-  // 5m（各ゴールラインから5m）…破線
-  dash(X(DIM.IN + 5),           Y(0), X(DIM.IN + 5),           Y(DIM.WID));
-  dash(X(DIM.IN + DIM.LEN - 5), Y(0), X(DIM.IN + DIM.LEN - 5), Y(DIM.WID));
+  // 5m（破線）
+  dash(X(DIM.IN + 5),               Y(0), X(DIM.IN + 5),               Y(DIM.WID));
+  dash(X(DIM.IN + DIM.LEN - 5),     Y(0), X(DIM.IN + DIM.LEN - 5),     Y(DIM.WID));
 
-  // ===== 横方向（短辺方向の線）=====
-  // 5m / 15m ライン（タッチから内側へ）…破線
-  dash(X(0), Y(5),  X(TOTAL_X), Y(5));
-  dash(X(0), Y(15), X(TOTAL_X), Y(15));
-  dash(X(0), Y(TOTAL_Y-15), X(TOTAL_X), Y(TOTAL_Y-15));
-  dash(X(0), Y(TOTAL_Y-5),  X(TOTAL_X), Y(TOTAL_Y-5));
+  // ===== 横方向（5mは破線 / 15mは実線）=====
+  // 15m（実線）
+  line(X(0), Y(15),           X(TOTAL_X), Y(15));
+  line(X(0), Y(TOTAL_Y - 15), X(TOTAL_X), Y(TOTAL_Y - 15));
+  // 5m（破線）
+  dash(X(0), Y(5),            X(TOTAL_X), Y(5));
+  dash(X(0), Y(TOTAL_Y - 5),  X(TOTAL_X), Y(TOTAL_Y - 5));
 
-  // ===== センターサークル（10m）…破線 =====
+  // センターサークル（半径10m）→破線
   ctx.save();
-  ctx.setLineDash([10,7]);
+  ctx.setLineDash(SD([10,7]));
   ctx.beginPath();
-  ctx.arc(X(DIM.IN + DIM.LEN/2), Y(DIM.WID/2),
-          (10 / TOTAL_Y) * pitchH, 0, Math.PI*2);
+  ctx.arc(X(DIM.IN + DIM.LEN/2), Y(DIM.WID/2), (10 / TOTAL_Y) * pitchH, 0, Math.PI*2);
   ctx.stroke();
   ctx.restore();
 
-  // （お好み）ゴールラインを太めに
-  thick(X(DIM.IN),  Y(0), X(DIM.IN),  Y(DIM.WID), 3);
-  thick(X(DIM.IN + DIM.LEN), Y(0), X(DIM.IN + DIM.LEN), Y(DIM.WID), 3);
+  // ゴールアイコン（左右）
+  drawGoalIcon(X, Y, pitchH, 'L');
+  drawGoalIcon(X, Y, pitchH, 'R');
+
+  ctx.setLineDash([]);   // ここで描画の最後に破線リセット
+} // ★ここで drawPitch を閉じる
+
+  function drawArrowHead(from, to) {
+  const ang = Math.atan2(to.y - from.y, to.x - from.x);
+  const len = S(12);
+  ctx.lineTo(x(to.x) - len * Math.cos(ang - Math.PI/6),
+             y(to.y) - len * Math.sin(ang - Math.PI/6));
+  ctx.moveTo(x(to.x), y(to.y));
+  ctx.lineTo(x(to.x) - len * Math.cos(ang + Math.PI/6),
+             y(to.y) - len * Math.sin(ang + Math.PI/6));
 }
 
-  // ===== 描画ユーティリティ =====
-  function drawArrowHead(from, to) {
-    const ang = Math.atan2(to.y - from.y, to.x - from.x);
-    const len = 12;
-    ctx.lineTo(x(to.x) - len * Math.cos(ang - Math.PI/6),
-               y(to.y) - len * Math.sin(ang - Math.PI/6));
-    ctx.moveTo(x(to.x), y(to.y));
-    ctx.lineTo(x(to.x) - len * Math.cos(ang + Math.PI/6),
-               y(to.y) - len * Math.sin(ang + Math.PI/6));
+function drawPlayer(p) {
+  const px = x(p.x), py = y(p.y);
+  ctx.beginPath();
+  ctx.fillStyle   = p.color;
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth   = S(1.5);
+  ctx.arc(px, py, C.PLAYER_R, 0, Math.PI*2);
+  ctx.fill(); ctx.stroke();
+
+  if (p.no != null){
+    const isWhite = /#fff/i.test(p.color) || p.color.toLowerCase() === 'white';
+    ctx.fillStyle    = isWhite ? '#111' : '#fff';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${S(12)}px system-ui, sans-serif`;
+    ctx.fillText(String(p.no), px, py);
   }
+}
 
-  function drawPlayer(p){
-    const px = x(p.x), py = y(p.y);
-    ctx.beginPath();
-    ctx.fillStyle   = p.color;
-    ctx.strokeStyle = '#222';
-    ctx.lineWidth   = 1.5;
-    ctx.arc(px, py, C.PLAYER_R, 0, Math.PI*2);
-    ctx.fill(); ctx.stroke();
-
-    if (p.no != null){
-      const isWhite = /#fff/i.test(p.color) || p.color === 'white';
-      ctx.fillStyle   = isWhite ? '#111' : '#fff';
-      ctx.textAlign   = 'center';
-      ctx.textBaseline= 'middle';
-      ctx.font        = '12px system-ui, sans-serif';
-      ctx.fillText(String(p.no), px, py);
-    }
-  }
-
-  function drawBall(){
+function drawBall() {
   const {x:bx,y:by} = state.ball;
   ctx.save();
   ctx.translate(x(bx), y(by));
@@ -168,29 +239,29 @@ function drawPitch() {
   // 本体
   ctx.fillStyle   = '#f8f0d8';
   ctx.strokeStyle = '#222';
-  ctx.lineWidth   = 1.4;
+  ctx.lineWidth   = S(1.4);
   ctx.beginPath();
   ctx.ellipse(0,0, C.BALL_R+8, C.BALL_R, 0, 0, Math.PI*2);
   ctx.fill(); ctx.stroke();
 
-  // サイドパネル色
+  // サイドパネル
   ctx.strokeStyle = '#c04';
-  ctx.lineWidth   = 2;
+  ctx.lineWidth   = S(2);
   ctx.beginPath();
   ctx.ellipse(0,0, C.BALL_R+6, C.BALL_R-2, 0, 0, Math.PI*2);
   ctx.stroke();
 
-  // 縫い目（中央の短い破線）
+  // 縫い目
   ctx.strokeStyle = '#333';
-  ctx.lineWidth = 1.2;
-  ctx.setLineDash([4,3]);
+  ctx.lineWidth = S(1.2);
+  ctx.setLineDash(SD([4,3]));
   ctx.beginPath();
   ctx.moveTo(-C.BALL_R-4, 0);
   ctx.lineTo( C.BALL_R+4, 0);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // うっすら影
+  // 影
   const grd = ctx.createRadialGradient(-6,-6,2, 0,0, C.BALL_R+10);
   grd.addColorStop(0, 'rgba(0,0,0,0.10)');
   grd.addColorStop(1, 'rgba(0,0,0,0)');
@@ -202,7 +273,6 @@ function drawPitch() {
   ctx.restore();
 }
 
-  // ===== 履歴ユーティリティ =====
 function snapshot(){
   return JSON.parse(JSON.stringify({
     unit: state.unit,
@@ -241,7 +311,7 @@ document.getElementById('undoBtn')?.addEventListener('click', undo);
     drawPitch();
 
     // 矢印（黄色）
-    ctx.lineWidth = 3;
+    ctx.lineWidth = S(3);
     ctx.strokeStyle = 'yellow';
     state.arrows.forEach(a=>{
       ctx.beginPath();
@@ -522,7 +592,7 @@ canvas.addEventListener('mouseup', (e) => {
 
   // ★ ダブルクリック：番号だけ編集（名前は無し）
   canvas.addEventListener('dblclick', (e)=>{
-    const px = e.offsetX, py = e.offsetY;
+    const {px, py} = getPointer(e);   // ★DPR対応
     let side='ALLY', idx = hit(state.allies, px, py);
     if (idx==null){ side='OPP'; idx = hit(state.opps, px, py); }
     if (idx==null) return;
@@ -540,17 +610,33 @@ canvas.addEventListener('mouseup', (e) => {
 
   // 外部セレクト（index.htmlの#sideSelect等があれば拾う）
   document.getElementById('sideSelect')?.addEventListener('change', (e)=>{
-    window.BoardAPI.setSide(e.target.value);
-  document.getElementById('resetPositions')?.addEventListener('click', () => {
-  reset(state.unit); // 今の人数(12/15)を維持したまま初期配置
-  });  
+  window.BoardAPI.setSide(e.target.value);
   });
 
   // === 名簿UI ===（IIFEの“中”に置く）========================
   const rosterEl = document.getElementById('roster');
 
   // 初期表示
+function initBoard(){
+  fitCanvasToCss();
   reset(15);
+  render();
+}
+
+window.addEventListener('load', () => {
+  initBoard();
+  if ('ResizeObserver' in window) {
+    const ro = new ResizeObserver(() => { fitCanvasToCss(); render(); });
+    ro.observe(canvas.parentElement || canvas);
+  }
+});
+
+// DOM 準備ができてから初期化
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initBoard, { once:true });
+} else {
+  initBoard();
+}
 
 function currentPlayersForRoster(){
   const viewFilter = p => state.view === 'ALL' ? true : p.role === state.view;
@@ -638,8 +724,11 @@ canvas.addEventListener("touchstart", touchHandler, { passive: false });
 canvas.addEventListener("touchmove",  touchHandler, { passive: false });
 canvas.addEventListener("touchend",   touchHandler, { passive: false });
 
+// リサイズ時はサイズを合わせてから再描画
+window.addEventListener('resize', () => {
+  fitCanvasToCss();
+  render();
+});
 
-  // リサイズ時に再描画
-  window.addEventListener('resize', render);
   })(); // ← IIFE はここで閉じる（名簿も含めて中に入っていること）
   // タッチをマウスイベントに変換するユーティリティ

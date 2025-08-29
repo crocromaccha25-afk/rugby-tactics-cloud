@@ -428,7 +428,7 @@ function subscribePlays(teamId){
     collection(db,'teams',teamId,'plays'),
     orderBy('updatedAt','desc')
   );
-unsubscribePlays = onSnapshot(q, (snap) => {
+  unsubscribePlays = onSnapshot(q, (snap) => {
   plays = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   renderList();
 

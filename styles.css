@@ -18,11 +18,10 @@ button:hover { background:#29405f; }
 .list li.active { outline:2px solid var(--accent); }
 .board-section { background:var(--panel); border:1px solid #2a3b53; border-radius:12px; padding:16px; }
 .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-canvas { width:100%; height:580px; background:#113; border:1px solid #2a3b53; border-radius:12px; display:block;}
+canvas { background:#113; border:1px solid #2a3b53; border-radius:12px; display:block; }
 .notes textarea { width:100%; height:100px; }
 .file input { display:inline-block; }
 .controls button.active { outline: 2px solid #60a5fa; }
-canvas#board { background: #0b7a3b; border-radius: 6px; }
 .roster{ margin-top:12px; display:grid; gap:6px; }
 .roster .row{ display:grid; grid-template-columns:220px 1fr; gap:8px; align-items:center; }
 .roster .header{ font-weight:bold; opacity:.8; }
@@ -177,8 +176,6 @@ canvas#board { background: #0b7a3b; border-radius: 6px; }
 .play-item.active{ outline:2px solid var(--accent); }
 .play-item .title{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .play-item .badges{ display:flex; gap:6px; }
-/* 旧：左下のプレー一覧ブロックは隠す（機能はJSに残る） */
-.plays-under-roster { display: none !important; }
 
 /* ヘッダー内のフィルタ行 */
 .plays-filter{
@@ -252,4 +249,206 @@ header { display:flex; align-items:center; gap:12px; padding:12px 16px; }
 /* styles.css に追加 */
 #authView #teamInfo {
   display: none;
+}
+
+/* ===== まずはPC向けの既存グリッド想定 ===== */
+.layout{
+  display:grid;
+  grid-template-columns: 320px 1fr; /* 左:サイド、右:ボード */
+  gap:16px;
+}
+
+/* ツールバーをグリッド化（幅が狭い時に自動で折り返す） */
+.toolbar{
+  display:grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap:8px;
+}
+.toolbar > *{ width:100%; }
+
+/* スマホ向け：幅が900px以下で1カラムに */
+@media (max-width: 900px){
+  .layout{
+    grid-template-columns: 1fr;
+  }
+  /* 先にボード、下に名簿＆プレー一覧 */
+  .board-section{ order:1; }
+  aside{ order:2; }
+
+  /* ツールバー：3列 */
+  .toolbar{
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* ボタンはタップしやすい高さに */
+  .toolbar button,
+  .toolbar select,
+  .controls button{
+    min-height:40px;
+    font-size:16px;
+  }
+
+  /* ヘッダー右側のバッジは改行OK */
+  .header-right{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  /* プレードックを横スクロール化（はみ出し防止） */
+  .plays-dock .dock-row{
+    overflow-x:auto;
+    -webkit-overflow-scrolling: touch;
+    gap:8px;
+  }
+}
+
+/* さらに狭い端末（<= 600px）で2列に */
+@media (max-width: 600px){
+  .toolbar{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* フィルタは縦積み */
+  .plays-filter{
+    display:grid;
+    grid-template-columns: 1fr;
+    gap:8px;
+  }
+}
+
+/* 超狭い端末（<= 420px）で1列＋文字大きめ */
+@media (max-width: 420px){
+  .toolbar{
+    grid-template-columns: 1fr;
+  }
+  body{ font-size:16px; }
+  input, select, button, textarea{ font-size:16px; } /* iOSのズーム防止 */
+}
+
+/* キャンバスの外側にラッパー（幅100%でアスペクト維持） */
+.board-section{
+  display:flex;
+  flex-direction:column;
+}
+
+/* スマホ時、名簿入力欄をスクロールで扱いやすく */
+.roster-grid{
+  max-height: 60vh;
+  overflow:auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* スマホで不要な説明・バッジは控えめ表示（任意） */
+@media (max-width: 600px){
+  #teamInfoApp,
+  #teamInfoAppNote{
+    display:none; /* 表示したくない場合 */
+  }
+}
+
+#appHeader{
+  position:sticky;
+  top:0;
+  z-index:100;
+  backdrop-filter: blur(6px);
+}
+
+.board-section {
+  /* 右カラムが狭すぎないように最低幅を確保（好みで調整） */
+  min-width: 320px;
+}
+
+.board-section { min-width: 320px; }
+@media (max-width: 360px){
+  .board-section { min-width: auto; }
+}
+
+/* キャンバス（表示サイズはCSS、実ピクセルはHTML属性で900x520） */
+#board{
+  width:100%;
+  max-width:900px;
+  height:auto;
+  aspect-ratio:900 / 520;
+  display:block;
+}
+canvas#board{ background:#0b7a3b; border-radius:6px; }
+
+.board-section { min-width:320px; }
+@media (max-width:360px){
+  .board-section { min-width:auto; }
+}
+
+/* ---- board周りの最終版（他を上書き） ---- */
+.board-section{
+  background: var(--panel);
+  border: 1px solid #2a3b53;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+}
+@media (max-width: 360px){
+  .board-section{ min-width: auto; }
+}
+
+#board{
+  display: block;
+  width: 100%;
+  max-width: 900px;
+  height: auto;                /* 実ピクセルはJSで調整 */
+  aspect-ratio: 900 / 520;     /* レイアウトの安定化用 */
+  background: #0b7a3b;
+  border-radius: 6px;
+  border: 1px solid #2a3b53;
+}
+
+/* レイアウト：PCは左サイド＋右ボード、スマホは1カラム */
+.layout{
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+@media (max-width: 900px){
+  .layout{ grid-template-columns: 1fr; }
+  .board-section{ order: 1; }
+  aside{ order: 2; }
+}
+
+/* stickyヘッダーが重ならないようコンテンツに余白 */
+:root{ --header-h: 56px; }
+#appHeader{ position: sticky; top: 0; z-index: 100; backdrop-filter: blur(6px); }
+main, #appView{ padding-top: var(--header-h); } /* main 等、実際のラッパに合わせて */
+
+/* 親カード */
+.board-wrap {       /* 親のクラス名は実際のものに合わせて */
+  border-radius: 12px;
+  overflow: hidden;            /* ←これで中身を角丸でクリップ */
+}
+
+/* キャンバスの外枠ラッパ */
+.board-container {
+  border-radius: 12px;   /* 角丸 */
+  overflow: hidden;      /* ←はみ出し部分をカット */
+  border: 1px solid #2a3b53;
+  background: var(--panel);
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;        /* 中央寄せ（任意） */
+}
+
+/* キャンバス */
+#board {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #0b7a3b;
+}
+
+/* 中身が空のバッジは出さない */
+#playsDock .badge:empty{
+  display: none;
+  padding: 0;
+  border: 0;
 }

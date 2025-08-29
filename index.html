@@ -162,9 +162,10 @@
       </label>
     </div>
 
-    <!--ラグビー 戦術ボード -->
-    <canvas id="board" width="900" height="520" aria-label="ラグビー戦術ボード"></canvas>
-
+    <!-- ボード -->
+    <div class="board-container"></div>
+      <canvas id="board" width="900" height="520"></canvas>
+    </dis>
     <div class="controls">
       <button data-tool="move"  class="active">移動</button>
       <button data-tool="arrow">矢印</button>
@@ -193,8 +194,51 @@
 
 <script type="module" src="js/app_cloud.js"></script>
 
-<!-- どこでもOK。必ず <body> の中に置く（例：最後の </body> の直前） -->
+<script>
+  // 画面幅に合わせてキャンバスの実サイズを調整
+  (function(){
+    const canvas = document.getElementById('board');
+    if (!canvas) return;
+
+    const BASE_W = 900;  // 元サイズ
+    const BASE_H = 520;  // 元サイズ
+    const RATIO  = BASE_H / BASE_W;
+
+    function resizeCanvas(){
+      // 親の幅に合わせる（上限は BASE_W）
+      const parent = canvas.parentElement || document.body;
+      const cssW   = Math.min(BASE_W, parent.clientWidth);
+      const cssH   = Math.round(cssW * RATIO);
+
+      // CSSサイズ
+      canvas.style.width  = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+
+      // 実ピクセル（デバイスピクセル密度を考慮）
+      const dpr = window.devicePixelRatio || 1;
+      const pxW = Math.round(cssW * dpr);
+      const pxH = Math.round(cssH * dpr);
+      if (canvas.width !== pxW || canvas.height !== pxH){
+        canvas.width  = pxW;
+        canvas.height = pxH;
+        // 既存のボードAPIに再描画があれば呼ぶ
+        window.BoardAPI?.redraw?.();
+      }
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    // 初期化時にも一度
+    resizeCanvas();
+
+    // 人数切替や初期化の後も再調整（あなたのコードに既にあるイベントにフック）
+    document.getElementById('unitSelect')?.addEventListener('change', resizeCanvas);
+  })();
+</script>
+
+<!-- どこでもOK。必ず <body> の中に置く -->
 <div id="playList" style="display:none"></div>
+
+
 
 </body>
 </html>
