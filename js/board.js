@@ -1,734 +1,799 @@
-// js/board.js  — できるだけ既存の形を維持した再実装
+/* Rugby tactics board v6: model-based freehand ink, viewport and TV presentation. */
 (() => {
+  'use strict';
   const canvas = document.getElementById('board');
-  const ctx    = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  // 数値をdpr倍するヘルパー
-  const S = (n) => n * dpr;
-  const SD = (arr) => arr.map(S); // 破線用
-
-if ('ResizeObserver' in window) {
-  const ro = new ResizeObserver(() => { fitCanvasToCss(); render(); });
-  ro.observe(canvas.parentElement || canvas);
-}
-
-  // CSS幅に合わせて実ピクセルをセット（高DPI対応）
-  function fitCanvasToCss() {
-  const BASE_W = 900, BASE_H = 520;
-  const ratio = BASE_W / BASE_H;
-
-  const parent = canvas.parentElement || document.body;
-  const cs = getComputedStyle(parent);
-  // 内容幅 = clientWidth - 左右padding
-  const contentW = parent.clientWidth
-    - parseFloat(cs.paddingLeft || 0)
-    - parseFloat(cs.paddingRight || 0);
-
-  const cssW = Math.min(contentW, BASE_W);
-  const cssH = Math.round(cssW / ratio);
-
-  // CSS 表示サイズ
-  canvas.style.width  = cssW + 'px';
-  canvas.style.height = cssH + 'px';
-
-  // 実ピクセル（高DPI）
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width  = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
-}
-
-
-  // ===== 状態 =====
+  if (!canvas) return;
+  let ctx = canvas.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+  const DEFAULT_ARROW = '#ffdf4b';
+  const OPPONENT_COLOR = '#111820';
+  const INK_LIMITS = {strokes:200,pointsPerStroke:1000,totalPoints:8000};
+  const mobileQuery = window.matchMedia('(max-width: 600px)');
+  const boardSection = $('boardSection') || canvas.closest('.board-section');
+  const boardContainer = canvas.parentElement;
+  const presentation = {active:false,native:false,pending:false,exiting:false,previousTool:'move',previousFocus:false,returnFocus:null,background:[],containerWidth:''};
+  const metrics = { width: 1100, height: 700, portrait: false, radius: 16 };
   const state = {
-    unit: 15,           // 15 or 12
-    view: 'ALL',        // 'ALL' | 'FW' | 'BK'
-    side: 'BOTH',       // 'BOTH' | 'ALLY' | 'OPP'
-    tool: 'move',       // 'move' | 'arrow' | 'ball'
-    allies: [],         // 味方: {x,y,role:'FW'|'BK'|'BENCH', no, color}
-    opps:   [],         // 敵
-    bench:  [],         // ベンチ（描画・保存対象なら保持）
-    arrows: [],         // {from:{x,y}, to:{x,y}}  ※正規化で保持
-    hover: null,        // {side:'ALLY'|'OPP', idx}
-    dragging: null,     // {side, idx}
-    drawingArrow: null, // {start:{x,y}, now:{x,y}}
-    ball: { x: 0.50, y: 0.50 }, // ボール座標（正規化）
-    draggingBall: false,
-    _history: []
+    schemaVersion: 4, unit: 15, court: 'FULL', view: 'ALL', side: 'BOTH', tool: 'move',
+    allies: [], opps: [], bench: [], arrows: [], strokes: [], ball: { x: 0.5, y: 0.475 },
+    arrowColor: DEFAULT_ARROW, penColor: '#ffffff', penWidth: 4
   };
-
-  // ===== 定数（ピクセル半径は描画専用）=====
-  const C = {
-  PLAYER_R: S(14),   // マーカー半径（見やすく +dpr）
-  HIT_R:    S(18),   // 当たり判定も連動
-  BALL_R:   S(12),   // ボールも少し大きめ
-  MARGIN:   S(24),   // コート外枠の余白
-  };
-
-  // ===== 正規化 <-> ピクセル 変換 =====
-  function x(t){ return canvas.width  * t; }
-  function y(t){ return canvas.height * t; }
-  function invX(px){ return px / canvas.width; }
-  function invY(py){ return py / canvas.height; }
-
- // 画面座標 -> キャンバス実ピクセル & 正規化(0..1)
-function getPointer(e){
-  const r  = canvas.getBoundingClientRect();
-  // CSS上の座標 → キャンバス実ピクセル
-  const px = (e.clientX - r.left) * (canvas.width  / r.width);
-  const py = (e.clientY - r.top ) * (canvas.height / r.height);
-  // 正規化（状態はこれで保存）
-  const nx = px / canvas.width;
-  const ny = py / canvas.height;
-  return { px, py, nx, ny };
-}
-
-// 90°回転したゴール「H」アイコン（サイズはピッチ高さ比）
-function drawGoalIcon(X, Y, pitchH, side /* 'L' | 'R' */){
-  // 見た目サイズ（ピッチ高さに対する比率で自動スケール）
-  const w  = pitchH * 0.14;  // 元のHの横幅（回転前想定）
-  const h  = pitchH * 0.08;  // 元のHの高さ
-  const lw = S(7);           // 線の太さ（dpr対応）
-
-  // 配置位置：インゴールの中ほどに置く
-  // 120m 系のX座標系：左=0, 右=120。ゴールラインは 10 / 110
-  // 少しデッドボールライン寄りにオフセットして見やすく
-  const mx = (side === 'L') ? 7 : 113;
-  const cx = X(mx);
-  const cy = Y(70 / 2);
-
-  // 中心に描いてから 90°回転させる
-  const halfW = w / 2, halfH = h / 2;
-
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(Math.PI / 2); // ★90度回転
-  ctx.lineWidth   = lw;
-  ctx.strokeStyle = '#fff';
-  ctx.lineCap     = 'butt';
-
-  ctx.beginPath();
-  // 左縦棒
-  ctx.moveTo(-halfW, -halfH);
-  ctx.lineTo(-halfW,  halfH);
-  // 右縦棒
-  ctx.moveTo( halfW, -halfH);
-  ctx.lineTo( halfW,  halfH);
-  // クロスバー
-  ctx.moveTo(-halfW, 0);
-  ctx.lineTo( halfW, 0);
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-// ===== コート描画（実寸比）=====
-function drawPitch() {
-  const w = canvas.width, h = canvas.height, m = C.MARGIN;
-  const L = { left: m, right: w - m, top: m, bottom: h - m };
-  const pitchW = L.right - L.left, pitchH = L.bottom - L.top;
-
-  // 実寸（m）
-  const DIM = { LEN: 100, WID: 70, IN: 10 };
-  const TOTAL_X = DIM.LEN + DIM.IN * 2; // 120m
-  const TOTAL_Y = DIM.WID;              // 70m
-
-  // メートル -> キャンバス変換
-  const X = (mx) => L.left + (mx / TOTAL_X) * pitchW;
-  const Y = (my) => L.top  + (my / TOTAL_Y) * pitchH;
-
-  // 背景（芝）
-  ctx.fillStyle = '#238d23';
-  ctx.fillRect(L.left, L.top, pitchW, pitchH);
-
-  // 芝の縞
-  for (let i = 0; i < 8; i++) {
-    ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)';
-    ctx.fillRect(L.left + (pitchW / 8) * i, L.top, pitchW / 8, pitchH);
+  let history = [];
+  let future = [];
+  let readOnly = false;
+  const viewport = { scale:1, x:0, y:0 };
+  const pointers = new Map();
+  let gesture = null;
+  let interaction = null;
+  let frame = 0;
+  let scrollTimer = null;
+  let inkNotice = '';
+  function changed(reason) {
+    canvas.dispatchEvent(new CustomEvent('boardchange',{detail:{reason}}));
   }
 
-  // 線のスタイル
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = S(3);
-  ctx.setLineDash([]); // まず実線に
-
-  // 外枠
-  ctx.strokeRect(L.left, L.top, pitchW, pitchH);
-
-  // ===== 縦方向（ゴール/ハーフ/22m/10m/5m）=====
-  const line = (x1,y1,x2,y2)=>{ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); };
-  const dash = (x1,y1,x2,y2)=>{ ctx.save(); ctx.setLineDash(SD([10,7])); line(x1,y1,x2,y2); ctx.restore(); };
-  const thick= (x1,y1,x2,y2,w)=>{ ctx.save(); const lw=ctx.lineWidth; ctx.lineWidth=w; line(x1,y1,x2,y2); ctx.lineWidth=lw; ctx.restore(); };
-
-  // ゴールライン（インゴール10m内側）→太め実線
-  thick(X(DIM.IN),           Y(0), X(DIM.IN),           Y(DIM.WID), S(3));
-  thick(X(DIM.IN + DIM.LEN), Y(0), X(DIM.IN + DIM.LEN), Y(DIM.WID), S(3));
-
-  // ハーフ（実線）
-  line(X(DIM.IN + DIM.LEN/2), Y(0), X(DIM.IN + DIM.LEN/2), Y(DIM.WID));
-
-  // 22m（実線）
-  line(X(DIM.IN + 22),              Y(0), X(DIM.IN + 22),              Y(DIM.WID));
-  line(X(DIM.IN + DIM.LEN - 22),    Y(0), X(DIM.IN + DIM.LEN - 22),    Y(DIM.WID));
-
-  // 10m（破線）
-  dash(X(DIM.IN + DIM.LEN/2 - 10),  Y(0), X(DIM.IN + DIM.LEN/2 - 10),  Y(DIM.WID));
-  dash(X(DIM.IN + DIM.LEN/2 + 10),  Y(0), X(DIM.IN + DIM.LEN/2 + 10),  Y(DIM.WID));
-
-  // 5m（破線）
-  dash(X(DIM.IN + 5),               Y(0), X(DIM.IN + 5),               Y(DIM.WID));
-  dash(X(DIM.IN + DIM.LEN - 5),     Y(0), X(DIM.IN + DIM.LEN - 5),     Y(DIM.WID));
-
-  // ===== 横方向（5mは破線 / 15mは実線）=====
-  // 15m（実線）
-  line(X(0), Y(15),           X(TOTAL_X), Y(15));
-  line(X(0), Y(TOTAL_Y - 15), X(TOTAL_X), Y(TOTAL_Y - 15));
-  // 5m（破線）
-  dash(X(0), Y(5),            X(TOTAL_X), Y(5));
-  dash(X(0), Y(TOTAL_Y - 5),  X(TOTAL_X), Y(TOTAL_Y - 5));
-
-  // センターサークル（半径10m）→破線
-  ctx.save();
-  ctx.setLineDash(SD([10,7]));
-  ctx.beginPath();
-  ctx.arc(X(DIM.IN + DIM.LEN/2), Y(DIM.WID/2), (10 / TOTAL_Y) * pitchH, 0, Math.PI*2);
-  ctx.stroke();
-  ctx.restore();
-
-  // ゴールアイコン（左右）
-  drawGoalIcon(X, Y, pitchH, 'L');
-  drawGoalIcon(X, Y, pitchH, 'R');
-
-  ctx.setLineDash([]);   // ここで描画の最後に破線リセット
-} // ★ここで drawPitch を閉じる
-
-  function drawArrowHead(from, to) {
-  const ang = Math.atan2(to.y - from.y, to.x - from.x);
-  const len = S(12);
-  ctx.lineTo(x(to.x) - len * Math.cos(ang - Math.PI/6),
-             y(to.y) - len * Math.sin(ang - Math.PI/6));
-  ctx.moveTo(x(to.x), y(to.y));
-  ctx.lineTo(x(to.x) - len * Math.cos(ang + Math.PI/6),
-             y(to.y) - len * Math.sin(ang + Math.PI/6));
-}
-
-function drawPlayer(p) {
-  const px = x(p.x), py = y(p.y);
-  ctx.beginPath();
-  ctx.fillStyle   = p.color;
-  ctx.strokeStyle = '#222';
-  ctx.lineWidth   = S(1.5);
-  ctx.arc(px, py, C.PLAYER_R, 0, Math.PI*2);
-  ctx.fill(); ctx.stroke();
-
-  if (p.no != null){
-    const isWhite = /#fff/i.test(p.color) || p.color.toLowerCase() === 'white';
-    ctx.fillStyle    = isWhite ? '#111' : '#fff';
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = `${S(12)}px system-ui, sans-serif`;
-    ctx.fillText(String(p.no), px, py);
+  // Derive height from layout width only. Mobile browser toolbars change the
+  // viewport height while scrolling; that must not clear the canvas bitmap.
+  function canvasRatio(portrait = !presentation.active && mobileQuery.matches) {
+    if (state.court === 'HALF') return portrait ? 7/6 : 6/7;
+    return portrait ? 7/11 : 11/7;
   }
-}
+  function markerInk(value) {
+    let raw = String(value || '').trim().toLowerCase();
+    if (raw === 'white') return '#17202b';
+    if (/^#[0-9a-f]{3}$/i.test(raw)) raw = '#' + [...raw.slice(1)].map(c=>c+c).join('');
+    let channels = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(raw)
+      ? [1,3,5].map(i=>parseInt(raw.slice(i,i+2),16)) : null;
+    if (!channels) {
+      const rgb = raw.match(/^rgba?\(\s*(\d+(?:\.\d+)?)[,\s]+(\d+(?:\.\d+)?)[,\s]+(\d+(?:\.\d+)?)/);
+      if (rgb) channels = rgb.slice(1,4).map(Number);
+    }
+    return channels && channels[0]*.2126 + channels[1]*.7152 + channels[2]*.0722 > 180 ? '#17202b' : '#ffffff';
+  }
 
-function drawBall() {
-  const {x:bx,y:by} = state.ball;
-  ctx.save();
-  ctx.translate(x(bx), y(by));
-  ctx.rotate(0.35);
-
-  // 本体
-  ctx.fillStyle   = '#f8f0d8';
-  ctx.strokeStyle = '#222';
-  ctx.lineWidth   = S(1.4);
-  ctx.beginPath();
-  ctx.ellipse(0,0, C.BALL_R+8, C.BALL_R, 0, 0, Math.PI*2);
-  ctx.fill(); ctx.stroke();
-
-  // サイドパネル
-  ctx.strokeStyle = '#c04';
-  ctx.lineWidth   = S(2);
-  ctx.beginPath();
-  ctx.ellipse(0,0, C.BALL_R+6, C.BALL_R-2, 0, 0, Math.PI*2);
-  ctx.stroke();
-
-  // 縫い目
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = S(1.2);
-  ctx.setLineDash(SD([4,3]));
-  ctx.beginPath();
-  ctx.moveTo(-C.BALL_R-4, 0);
-  ctx.lineTo( C.BALL_R+4, 0);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // 影
-  const grd = ctx.createRadialGradient(-6,-6,2, 0,0, C.BALL_R+10);
-  grd.addColorStop(0, 'rgba(0,0,0,0.10)');
-  grd.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = grd;
-  ctx.beginPath();
-  ctx.ellipse(0,0, C.BALL_R+8, C.BALL_R, 0, 0, Math.PI*2);
-  ctx.fill();
-
-  ctx.restore();
-}
-
-function snapshot(){
-  return JSON.parse(JSON.stringify({
-    unit: state.unit,
-    view: state.view,
-    allies: state.allies,
-    opps: state.opps,
-    bench: state.bench,
-    arrows: state.arrows,
-    ball: state.ball
-  }));
-}
-
-function pushHistory(){
-  state._history.push(snapshot());
-  if (state._history.length > 50) state._history.shift(); // 履歴は最大50手まで
-}
-
-function undo(){
-  const prev = state._history.pop();
-  if (!prev) return;
-  state.unit   = prev.unit;
-  state.view   = prev.view;
-  state.allies = prev.allies;
-  state.opps   = prev.opps;
-  state.bench  = prev.bench;
-  state.arrows = prev.arrows;
-  state.ball   = prev.ball;
-  render(); // 描画更新
-}
-
-// HTMLの「戻る」ボタンと接続
-document.getElementById('undoBtn')?.addEventListener('click', undo);
-  
-  function render(){
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    drawPitch();
-
-    // 矢印（黄色）
-    ctx.lineWidth = S(3);
-    ctx.strokeStyle = 'yellow';
-    state.arrows.forEach(a=>{
-      ctx.beginPath();
-      ctx.moveTo(x(a.from.x), y(a.from.y));
-      ctx.lineTo(x(a.to.x),   y(a.to.y));
-      drawArrowHead(a.from, a.to);
-      ctx.stroke();
+  // Spread over both halves; FW nearer the centre, BK and back three deeper.
+  const formation = [
+    [1,.435,.34], [2,.435,.475], [3,.435,.61],
+    [4,.35,.40], [5,.35,.55], [6,.43,.18], [7,.43,.77], [8,.265,.475],
+    [9,.265,.30], [10,.265,.65], [11,.155,.145], [12,.17,.31],
+    [13,.17,.64], [14,.155,.805], [15,.155,.475]
+  ];
+  function makePlayers(unit, opponent = false) {
+    const omitted = unit === 12 ? new Set([6,7,8]) : new Set();
+    return formation.filter(([no]) => !omitted.has(no)).map(([no,x,y]) => ({
+      x: opponent ? 1-x : x, y, no, role: no <= 8 ? 'FW' : 'BK',
+      color: opponent ? OPPONENT_COLOR : no <= 8 ? '#ef6270' : '#59aaff', name: ''
+    }));
+  }
+  function makeBench(unit) {
+    const count = unit === 12 ? 6 : 8;
+    return Array.from({ length: count }, (_,i) => ({
+      x: .16 + i * (.68/(count-1)), y: .94, no: 16+i,
+      role: 'BENCH', color: '#ffffff', name: ''
+    }));
+  }
+  function getInitialState(unit=15,court='FULL',template='balanced') {
+    unit=Number(unit)===12?12:15;
+    const base={schemaVersion:4,unit,court:court==='HALF'?'HALF':'FULL',view:'ALL',side:'BOTH',allies:makePlayers(unit),opps:makePlayers(unit,true),bench:makeBench(unit),arrows:[],strokes:[],ball:{x:.5,y:.475},arrowColor:DEFAULT_ARROW,penColor:'#ffffff',penWidth:4};
+    const put=(list,no,x,y)=>{const p=list.find(p=>p.no===no);if(p){p.x=x;p.y=y;}};
+    if(template==='scrum') {
+      const positions=[[1,.46,.39],[2,.46,.48],[3,.46,.57],[4,.385,.435],[5,.385,.525],[6,.385,.30],[7,.385,.66],[8,.31,.48],[9,.235,.46],[10,.27,.74],[11,.145,.16],[12,.16,.31],[13,.16,.65],[14,.145,.81],[15,.145,.48]];
+      positions.forEach(([n,x,y])=>{put(base.allies,n,x,y);put(base.opps,n,1-x,y);});
+      base.ball={x:.5,y:.48};
+    } else if(template==='lineout') {
+      const forwards=base.allies.filter(p=>p.role==='FW'&&p.no!==2);
+      forwards.forEach((p,i)=>{const y=.18+i*(.48/Math.max(1,forwards.length-1));put(base.allies,p.no,.44,y);put(base.opps,p.no,.56,y);});
+      put(base.allies,2,.5,.065);put(base.opps,2,.65,.76);
+      const backs=[[9,.29,.43],[10,.28,.75],[11,.145,.15],[12,.16,.31],[13,.16,.65],[14,.145,.82],[15,.145,.48]];
+      backs.forEach(([n,x,y])=>{put(base.allies,n,x,y);put(base.opps,n,1-x,y);});base.ball={x:.5,y:.11};
+    } else if(template==='kickoff') {
+      const fw=base.allies.filter(p=>p.role==='FW'),bk=base.allies.filter(p=>p.role==='BK');
+      fw.forEach((p,i)=>{const y=.15+i*.64/Math.max(1,fw.length-1);put(base.allies,p.no,.43,y);put(base.opps,p.no,.66,y);});
+      bk.forEach((p,i)=>{const y=.145+i*.66/Math.max(1,bk.length-1);put(base.allies,p.no,.2,y);put(base.opps,p.no,.82,y);});
+      put(base.allies,10,.49,.475);base.ball={x:.52,y:.475};
+    }
+    return base;
+  }
+  function snapshot() {
+    const { schemaVersion,unit,court,view,side,allies,opps,bench,arrows,strokes,ball,arrowColor,penColor,penWidth } = state;
+    return clone({ schemaVersion,unit,court,view,side,allies,opps,bench,arrows,strokes,ball,arrowColor,penColor,penWidth });
+  }
+  function remember(before) {
+    future=[];
+    history.push(before);
+    if (history.length > 60) history.shift();
+    if ($('undoBtn')) $('undoBtn').disabled = false;
+  }
+  function reset(unit = state.unit, record = true) {
+    if(readOnly&&record)return;
+    cancelInteraction();
+    inkNotice='';
+    if (record && state.allies.length) remember(snapshot());
+    const initial=getInitialState(unit,state.court);
+    for(const key of ['allies','opps','bench'])initial[key].forEach(p=>{p.name=state[key].find(old=>Number(old.no)===p.no)?.name||'';});
+    Object.assign(state,initial);
+    syncUI(); renderRoster(); redraw();
+    if(record)changed('reset');
+  }
+  function undo() {
+    if(readOnly)return;
+    cancelInteraction();
+    inkNotice='';
+    const previous = history.pop();
+    if (!previous) return;
+    future.push(snapshot());
+    Object.assign(state,previous);
+    syncUI(); renderRoster(); redraw();
+    changed('undo');
+  }
+  function redo() {
+    if(readOnly)return;
+    cancelInteraction();inkNotice='';const next=future.pop();if(!next)return;
+    history.push(snapshot());Object.assign(state,next);syncUI();renderRoster();redraw();changed('redo');
+  }
+  function applyTemplate(name) {
+    if(readOnly)return;
+    cancelInteraction();inkNotice='';
+    const initial=getInitialState(state.unit,state.court,name);remember(snapshot());
+    for(const key of ['allies','opps','bench']) {
+      state[key]=state[key].map(p=>{const pos=initial[key].find(q=>Number(q.no)===Number(p.no));return pos?{...p,x:pos.x,y:pos.y}:p;});
+    }
+    state.ball=initial.ball;state.arrows=[];state.strokes=[];state.view='ALL';state.side='BOTH';syncUI();renderRoster();redraw();changed('template');
+  }
+  function color(value, fallback = DEFAULT_ARROW) {
+    return typeof value === 'string' && value.length < 80 && CSS.supports('color',value)
+      ? value : fallback;
+  }
+  const finite = n => typeof n === 'number' && Number.isFinite(n);
+  function validPoint(p) { return p && finite(p.x) && finite(p.y); }
+  function point(p) { return { x:clamp(p.x,.015,.985), y:clamp(p.y,.015,.985) }; }
+  function inkPoint(p){return {x:Math.round(clamp(p.x,0,1)*100000)/100000,y:Math.round(clamp(p.y,0,1)*100000)/100000};}
+  function readStrokes(list){
+    if(!Array.isArray(list))return [];
+    if(list.length>INK_LIMITS.strokes)throw new Error('落書きの線が多すぎます。200本以下にしてください。');
+    let total=0;
+    return list.flatMap(stroke=>{
+      if(!stroke||!Array.isArray(stroke.points))return [];
+      total+=stroke.points.length;
+      if(stroke.points.length>INK_LIMITS.pointsPerStroke||total>INK_LIMITS.totalPoints)throw new Error('落書きのデータが大きすぎます。線を減らしてください。');
+      const points=stroke.points.filter(validPoint).map(inkPoint);
+      return points.length?[{points,color:color(stroke.color,'#ffffff'),width:finite(stroke.width)?clamp(stroke.width,1,12):4}]:[];
     });
-    if (state.drawingArrow){
-      const a = state.drawingArrow;
-      ctx.beginPath();
-      ctx.moveTo(x(a.start.x), y(a.start.y));
-      ctx.lineTo(x(a.now.x),   y(a.now.y));
-      drawArrowHead(a.start, a.now);
-      ctx.stroke();
+  }
+  function readPlayers(list, fallback, opponent = false) {
+    if (!Array.isArray(list)) return fallback;
+    return list.filter(p => validPoint(p) && (typeof p.no === 'number' || typeof p.no === 'string'))
+      .map(p => ({ ...point(p), no: p.no, name: typeof p.name === 'string' ? p.name : '',
+        role: ['FW','BK','BENCH'].includes(p.role) ? p.role : Number(p.no) <= 8 ? 'FW' : 'BK',
+        color: opponent ? OPPONENT_COLOR : color(p.color, Number(p.no)<=8 ? '#ef6270' : '#59aaff')
+      }));
+  }
+  function setState(input = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('盤面データの形式が正しくありません');
+    const s = input.boardState || input;
+    if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error('盤面データの形式が正しくありません');
+    const strokes=readStrokes(s.strokes);
+    cancelInteraction();
+    inkNotice='';
+    const unit = Number(s.unit) === 12 ? 12 : 15;
+    const all = readPlayers(s.allies,makePlayers(unit));
+    const legacyBench = all.filter(p => p.role === 'BENCH');
+    const allies = all.filter(p => p.role !== 'BENCH');
+    const opps = readPlayers(s.opps,makePlayers(unit,true),true).filter(p => p.role !== 'BENCH');
+    // Old 12-player data omitted two backs; fill their vacant slots on load.
+    if (unit === 12 && !s.schemaVersion) {
+      for (const list of [allies,opps]) {
+        const defaults = makePlayers(unit,list === opps);
+        for (const p of defaults) if (!list.some(item => Number(item.no) === p.no)) list.push(p);
+      }
     }
+    Object.assign(state,{
+      schemaVersion:4, unit, court:s.court === 'HALF' ? 'HALF' : 'FULL',
+      view:['FW','BK'].includes(s.view) ? s.view : 'ALL',
+      side:['ALLY','OPP'].includes(s.side) ? s.side : 'BOTH',
+      allies,
+      opps:opps.length ? opps : makePlayers(unit,true),
+      bench:readPlayers(s.bench,legacyBench.length ? legacyBench : makeBench(unit))
+        .map(p => ({...p,role:'BENCH',color:'#ffffff'})),
+      arrows:Array.isArray(s.arrows) ? s.arrows.filter(a => a && validPoint(a.from) && validPoint(a.to))
+        .map(a => ({ from:point(a.from),to:point(a.to),color:color(a.color,DEFAULT_ARROW) })) : [],
+      strokes,
+      ball:validPoint(s.ball) ? point(s.ball) : {x:.5,y:.475},
+      arrowColor:color(s.arrowColor,DEFAULT_ARROW),
+      penColor:color(s.penColor,'#ffffff'),penWidth:[2,4,8].includes(Number(s.penWidth))?Number(s.penWidth):4
+    });
+    history = [];future=[];resetViewport(false);
+    syncUI(); renderRoster(); redraw();
+  }
 
-    // プレイヤー描画（view/sideフィルタ適用）
-    const filterByView = (p)=> state.view==='ALL' ? true : (p.role===state.view);
-    if (state.side !== 'OPP')  state.allies.filter(filterByView).forEach(drawPlayer);
-    if (state.side !== 'ALLY') state.opps  .filter(filterByView).forEach(drawPlayer);
-  
-      // ベンチ描画：味方または両チーム表示のときだけ
-    if (state.view === 'ALL' && state.side !== 'OPP') {
-      state.bench.forEach(drawPlayer);
+  // Rotate the presentation only. Saved positions do not change with orientation.
+  function screen(p) {
+    return metrics.portrait
+      ? { x:(1-p.y)*metrics.width, y:p.x*metrics.height }
+      : { x:p.x*metrics.width, y:p.y*metrics.height };
+  }
+  function field(p) {
+    return metrics.portrait
+      ? { x:p.y/metrics.height, y:1-p.x/metrics.width }
+      : { x:p.x/metrics.width, y:p.y/metrics.height };
+  }
+  function pointer(e) {
+    const r = canvas.getBoundingClientRect();
+    return {x:((e.clientX-r.left)*metrics.width/r.width-viewport.x)/viewport.scale,y:((e.clientY-r.top)*metrics.height/r.height-viewport.y)/viewport.scale};
+  }
+  function rawPointer(e) {
+    const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left)*metrics.width/r.width,y:(e.clientY-r.top)*metrics.height/r.height};
+  }
+  function clampViewport() {
+    viewport.x=clamp(viewport.x,metrics.width*(1-viewport.scale),0);viewport.y=clamp(viewport.y,metrics.height*(1-viewport.scale),0);
+  }
+  function zoomTo(scale,anchor={x:metrics.width/2,y:metrics.height/2}) {
+    const world={x:(anchor.x-viewport.x)/viewport.scale,y:(anchor.y-viewport.y)/viewport.scale};
+    viewport.scale=clamp(scale,1,4);viewport.x=anchor.x-world.x*viewport.scale;viewport.y=anchor.y-world.y*viewport.scale;clampViewport();syncZoom();redraw();
+  }
+  function syncZoom(){if($('zoomLevel'))$('zoomLevel').textContent=Math.round(viewport.scale*100)+'%';if($('zoomOutBtn'))$('zoomOutBtn').disabled=viewport.scale<=1;if($('zoomInBtn'))$('zoomInBtn').disabled=viewport.scale>=4;}
+  function resetViewport(draw=true){viewport.scale=1;viewport.x=viewport.y=0;syncZoom();if(draw)redraw();}
+  function boundedScreen(p, radius = metrics.radius) {
+    return {x:clamp(p.x,radius+2,metrics.width-radius-2),y:clamp(p.y,radius+2,metrics.height-radius-2)};
+  }
+  function fit() {
+    if(presentation.active)fitPresentation();
+    const r = canvas.getBoundingClientRect();
+    if (!r.width) return false; // Hidden auth view: retain valid dimensions.
+    const portrait = !presentation.active && mobileQuery.matches;
+    const width = Math.round(r.width*64)/64;
+    const height = Math.round(width/canvasRatio(portrait)*64)/64;
+    const sizeChanged=metrics.portrait!==portrait||Math.abs(metrics.width-width)>1||Math.abs(metrics.height-height)>1;
+    if(sizeChanged){cancelInteraction();gesture=null;pointers.clear();resetViewport(false);}
+    // Set CSS height before bitmap dimensions, then repaint in the same frame.
+    // Ignore visualViewport.height / innerHeight when deciding bitmap size.
+    if (canvas.style.height !== height+'px') canvas.style.height = height+'px';
+    metrics.width = width; metrics.height = height; metrics.portrait = portrait;
+    const markerScale=presentation.active&&state.court==='HALF' ? .025 : .035;
+    metrics.radius = clamp(Math.min(width,height)*markerScale,presentation.active?9:11.5,presentation.active?36:18);
+    // Limit TV backing-store memory, including a high-DPI or 4K display.
+    const dpr = presentation.active
+      ? Math.min(window.devicePixelRatio || 1,2,Math.sqrt(16000000/(width*height)))
+      : Math.min(window.devicePixelRatio || 1,4);
+    const w = Math.max(1,Math.round(width*dpr)), h = Math.max(1,Math.round(height*dpr));
+    // Writing either attribute clears the bitmap, even if the value is equal.
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx.setTransform(canvas.width/width,0,0,canvas.height/height,0,0);
+    return true;
+  }
+  function redraw() {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {frame=0; if(fit()) render();});
+  }
+  function repaintAfterScroll() {
+    redraw();
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(redraw,120);
+  }
+  function restoreDrawing() {
+    if (frame) { cancelAnimationFrame(frame); frame = 0; }
+    redraw();
+  }
+  function drawPitch() {
+    ctx.save();
+    if (metrics.portrait) { ctx.translate(metrics.width,0); ctx.rotate(Math.PI/2); }
+    const w = metrics.portrait ? metrics.height : metrics.width;
+    const h = metrics.portrait ? metrics.width : metrics.height;
+    const left = .04*w, top = .055*h, pw = .92*w, ph = .805*h;
+    const half = state.court === 'HALF', length = half ? 60 : 120;
+    const X = m => left + m/length*pw, Y = m => top + m/70*ph;
+    ctx.fillStyle = '#183a2c'; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle = '#28764e'; ctx.fillRect(left,top,pw,ph);
+    for (let i=0;i<length/10;i++) {
+      ctx.fillStyle = i%2 ? 'rgba(255,255,255,.025)' : 'rgba(0,0,0,.065)';
+      ctx.fillRect(left+i*pw/(length/10),top,pw/(length/10),ph);
     }
+    ctx.fillStyle='rgba(6,34,25,.18)';ctx.fillRect(X(0),top,pw*10/length,ph);
+    if (!half) ctx.fillRect(X(110),top,pw/12,ph);
+    const line=(a,b,c,d,dashed=false) => {
+      ctx.beginPath();ctx.setLineDash(dashed ? [Math.max(3,w*.009),Math.max(3,w*.007)] : []);
+      ctx.moveTo(a,b);ctx.lineTo(c,d);ctx.stroke();
+    };
+    ctx.strokeStyle='rgba(245,255,246,.8)';ctx.lineWidth=Math.max(1,w*.0018);
+    ctx.setLineDash([]);ctx.strokeRect(left,top,pw,ph);
+    (half ? [10,32,60] : [10,32,60,88,110]).forEach(m=>line(X(m),Y(0),X(m),Y(70)));
+    (half ? [15,50] : [15,50,70,105]).forEach(m=>line(X(m),Y(0),X(m),Y(70),true));
+    [5,15,55,65].forEach(m=>line(X(15),Y(m),X(half?60:105),Y(m),true));
+    ctx.setLineDash([]);
+    (half ? [10] : [10,110]).forEach(m=>{
+      const dx=pw*.011,dy=ph*.065;
+      ctx.strokeStyle='#ffffff';ctx.lineWidth=Math.max(2,w*.003);
+      line(X(m)-dx,Y(35)-dy,X(m)+dx,Y(35)-dy);
+      line(X(m)-dx,Y(35)+dy,X(m)+dx,Y(35)+dy);
+      line(X(m),Y(35)-dy,X(m),Y(35)+dy);
+    });
+    ctx.fillStyle='rgba(238,255,243,.6)';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.font=`600 ${clamp(w*.013,8,metrics.radius>18?24:12)}px system-ui,sans-serif`;
+    (half ? [[32,'22'],[60,'50']] : [[32,'22'],[60,'50'],[88,'22']]).forEach(([m,label])=>ctx.fillText(label,X(m),top*.47));
+    ctx.fillStyle='rgba(235,246,243,.55)';ctx.font=`${clamp(w*.011,8,metrics.radius>18?22:11)}px system-ui,sans-serif`;
+    ctx.fillText('BENCH',w*.07,h*.94);
+    ctx.restore();
+  }
+  function drawArrow(a, preview=false) {
+    const from=screen(a.from),to=screen(a.to);
+    const angle=Math.atan2(to.y-from.y,to.x-from.x),head=clamp(metrics.radius*.75,8,metrics.radius>18?26:13);
+    const weight=clamp(metrics.radius/6,3,6);
+    const shade=color(a.color,DEFAULT_ARROW);
+    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.globalAlpha=preview ? 0.85 : 1;
+    ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);
+    ctx.lineTo(to.x-head*Math.cos(angle-Math.PI/6),to.y-head*Math.sin(angle-Math.PI/6));
+    ctx.moveTo(to.x,to.y);ctx.lineTo(to.x-head*Math.cos(angle+Math.PI/6),to.y-head*Math.sin(angle+Math.PI/6));
+    ctx.strokeStyle=/^#(111820|171b22|000000|000)$/i.test(shade)?'rgba(255,255,255,.8)':'rgba(8,27,27,.6)';
+    ctx.lineWidth=weight*2;ctx.stroke();ctx.strokeStyle=shade;ctx.lineWidth=weight;ctx.stroke();ctx.restore();
+  }
+  function inkWidth(stroke){return Math.max(1,stroke.width*Math.min(metrics.width,metrics.height)/700);}
+  function drawStroke(stroke){
+    if(!stroke.points.length)return;
+    const width=inkWidth(stroke),shade=color(stroke.color,'#ffffff');
+    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=shade;ctx.fillStyle=shade;
+    if(/^#(?:000|000000|111820|171b22)$/i.test(shade)){ctx.shadowColor='#ffffffb3';ctx.shadowBlur=1.5;}
+    const first=screen(stroke.points[0]);
+    if(stroke.points.length===1){ctx.beginPath();ctx.arc(first.x,first.y,width/2,0,Math.PI*2);ctx.fill();}
+    else{ctx.beginPath();ctx.moveTo(first.x,first.y);for(let i=1;i<stroke.points.length;i++){const p=screen(stroke.points[i]);ctx.lineTo(p.x,p.y);}ctx.lineWidth=width;ctx.stroke();}
+    ctx.restore();
+  }
+  function drawPlayer(p,bench=false,selected=false) {
+    const {x,y}=screen(p),r=metrics.radius*(bench ? 0.86 : 1);
+    ctx.save();
+    ctx.shadowColor='rgba(0,0,0,.3)';ctx.shadowBlur=3;ctx.shadowOffsetY=2;
+    ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=p.color;ctx.fill();
+    ctx.shadowColor='transparent';ctx.lineWidth=1.4;ctx.strokeStyle='#e9f1f3';ctx.stroke();
+    if(selected){ctx.beginPath();ctx.arc(x,y,r+4,0,Math.PI*2);ctx.strokeStyle='#76e4bd';ctx.lineWidth=2;ctx.stroke();}
+    ctx.fillStyle=bench ? '#17202b' : markerInk(p.color);
+    ctx.font=`700 ${clamp(r*.94,11,metrics.radius>18?32:15)}px system-ui,-apple-system,sans-serif`;
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(p.no),x,y+.5);ctx.restore();
+  }
+  function ballPath(a,b) {
+    ctx.beginPath();ctx.moveTo(-a,0);
+    ctx.bezierCurveTo(-a*.62,-b*1.34,a*.62,-b*1.34,a,0);
+    ctx.bezierCurveTo(a*.62,b*1.34,-a*.62,b*1.34,-a,0);ctx.closePath();
+  }
+  function drawBall() {
+    const p=screen(state.ball),a=metrics.radius*1.4,b=metrics.radius*.83;
+    ctx.save();ctx.translate(p.x,p.y);ctx.rotate(-.45);
+    ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=5;ctx.shadowOffsetY=3;
+    const gradient=ctx.createLinearGradient(0,-b,0,b);
+    gradient.addColorStop(0,'#ffffff');gradient.addColorStop(.4,'#fffdf5');gradient.addColorStop(1,'#b9c6c0');
+    ballPath(a,b);ctx.fillStyle=gradient;ctx.fill();ctx.shadowColor='transparent';
+    ctx.lineWidth=1;ctx.strokeStyle='#1f3531';ctx.stroke();
+    ctx.save();ballPath(a,b);ctx.clip();
+    // Coloured end panels, thin turquoise piping and rubber grip.
+    [-1,1].forEach(sign=>{
+      ctx.save();ctx.scale(sign,1);ctx.beginPath();ctx.moveTo(a*.42,-b*1.15);
+      ctx.bezierCurveTo(a*.2,-b*.3,a*.4,b*.35,a*.65,b*1.1);
+      ctx.lineTo(a*1.3,b*1.1);ctx.lineTo(a*1.3,-b*1.15);ctx.closePath();ctx.fillStyle='#163c65';ctx.fill();
+      ctx.beginPath();ctx.moveTo(a*.28,-b);ctx.bezierCurveTo(a*.1,-b*.4,a*.24,b*.4,a*.49,b);
+      ctx.strokeStyle='#23b99c';ctx.lineWidth=2;ctx.stroke();ctx.restore();
+    });
+    ctx.fillStyle='rgba(26,58,60,.13)';
+    for(let row=-2;row<=2;row++)for(let col=-4;col<=4;col++){
+      ctx.beginPath();ctx.arc(col*a*.13,row*b*.27,.5,0,Math.PI*2);ctx.fill();
+    }
+    ctx.restore();
+    ctx.beginPath();ctx.moveTo(-a*.37,-b*.05);ctx.quadraticCurveTo(0,-b*.23,a*.37,-b*.05);
+    ctx.strokeStyle='#75857f';ctx.lineWidth=1;ctx.stroke();
+    ctx.strokeStyle='#fefefe';ctx.lineWidth=1.1;ctx.lineCap='round';
+    for(let i=-2;i<=2;i++) {const x=i*a*.12;ctx.beginPath();ctx.moveTo(x,-b*.30);ctx.lineTo(x,-b*.02);ctx.stroke();}
+    ctx.restore();
+  }
+  function visibleTargets() {
+    const targets=[];
+    const add=(list,side)=>list.forEach((p,index)=>{
+      if(p.role==='BENCH' ? state.view==='ALL' : state.view==='ALL'||state.view===p.role) targets.push({p,list,side,index});
+    });
+    if(state.side!=='OPP'){add(state.allies,'ALLY');add(state.bench,'BENCH');}
+    if(state.side!=='ALLY')add(state.opps,'OPP');
+    return targets;
+  }
+  function render() {
+    ctx.clearRect(0,0,metrics.width,metrics.height);ctx.fillStyle='#183a2c';ctx.fillRect(0,0,metrics.width,metrics.height);
+    ctx.save();ctx.translate(viewport.x,viewport.y);ctx.scale(viewport.scale,viewport.scale);drawPitch();
+    state.strokes.forEach(drawStroke);
+    if(interaction?.kind==='pen')drawStroke(interaction.stroke);
+    state.arrows.forEach(a=>drawArrow(a));
+    if(interaction?.kind==='arrow')drawArrow(interaction.arrow,true);
+    visibleTargets().forEach(t=>drawPlayer(t.p,t.side==='BENCH',interaction?.target?.p===t.p));
     drawBall();
-    renderRoster();
+    ctx.restore();
   }
-
-  // ===== ヒットテスト =====
-  function hit(list, px, py, filter=null){
-    for (let i=list.length-1; i>=0; i--){
-      const p = list[i];
-      if (filter && !filter(p)) continue;
-      const dx = x(p.x) - px;
-      const dy = y(p.y) - py;
-      if (dx*dx + dy*dy <= C.HIT_R*C.HIT_R) return i;
-    }
-    return null;
+  function pick(p,pointerType='mouse') {
+    const candidates=visibleTargets().map(t=>({...t,kind:'player',distance:Math.hypot(screen(t.p).x-p.x,screen(t.p).y-p.y)}));
+    const bp=screen(state.ball);
+    candidates.push({kind:'ball',distance:Math.hypot(bp.x-p.x,bp.y-p.y)});
+    candidates.sort((a,b)=>a.distance-b.distance);
+    const target=candidates[0];
+    const tolerance=pointerType==='mouse'?metrics.radius+5/viewport.scale:Math.max(23/viewport.scale,metrics.radius+10/viewport.scale);
+    return target&&target.distance<=tolerance?target:null;
   }
-  function hitBall(px, py){
-    const dx = x(state.ball.x) - px;
-    const dy = y(state.ball.y) - py;
-    return (dx*dx + dy*dy) <= (C.BALL_R + C.PLAYER_R) ** 2;
+  function hitArrow(p) {
+    let best=null,distance=14/viewport.scale;
+    state.arrows.forEach((a,index)=>{
+      const u=screen(a.from),v=screen(a.to),dx=v.x-u.x,dy=v.y-u.y;
+      const t=clamp(((p.x-u.x)*dx+(p.y-u.y)*dy)/(dx*dx+dy*dy||1),0,1);
+      const d=Math.hypot(p.x-u.x-t*dx,p.y-u.y-t*dy);
+      if(d<=distance){distance=d;best=index;}
+    });return best;
   }
-
-  // ===== 初期配置（J SPORTS 画像の向きで、味方=左, 敵=右）=====
-  function gridLine(startX, startY, stepX, count, role, startNo, color){
-    const arr = [];
-    for (let i=0;i<count;i++){
-      arr.push({ x: startX + stepX*i, y: startY, role, no: startNo+i, color });
-    }
-    return arr;
+  function pointSegmentDistance2(p,a,b){
+    const dx=b.x-a.x,dy=b.y-a.y,t=clamp(((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy||1),0,1);
+    return (p.x-a.x-t*dx)**2+(p.y-a.y-t*dy)**2;
   }
-
-  function makeAllies(unit){
-  const FW   = '#e74c3c', BK = '#3498db', BENCH = '#ffffff';
-  const leftBand = 0.20;   // 味方の基準X（左20% 付近から）
-  const dy = 0.09;         // 縦の間隔
-  const cy = 0.50;         // 中央Y
-
-  const A = [];
-if (unit === 15){
-  // 0〜1 正規化座標で、味方は x<0.49 に収める
-  const cy = 0.50, dy = 0.09;
-  const L = x => Math.min(x, 0.49 - 0.005); // 相手陣地に入らないクリップ
-
-  // ===== FW（1〜8）=====
-  // 1,2,3（フロントロー）横一列：左ハーフ内に
-  A.push({ x: L(0.36), y: cy - 1*dy, role:'FW', no:1, color:FW });
-  A.push({ x: L(0.40), y: cy - 1*dy, role:'FW', no:2, color:FW });
-  A.push({ x: L(0.44), y: cy - 1*dy, role:'FW', no:3, color:FW });
-
-  // 4,5（ロック）縦2枚・少し右寄せ
-  A.push({ x: L(0.42), y: cy + 0.00, role:'FW', no:4, color:FW });
-  A.push({ x: L(0.46), y: cy + 0.00, role:'FW', no:5, color:FW });
-
-  // 6（ブラインド）上・やや外
-  A.push({ x: L(0.28), y: cy - 2*dy, role:'FW', no:6, color:FW });
-  // 7（オープン）下・やや外
-  A.push({ x: L(0.46), y: cy + 2*dy, role:'FW', no:7, color:FW });
-
-  // 8（No.8）ロックの後ろ
-  A.push({ x: L(0.42), y: cy + 1*dy, role:'FW', no:8, color:FW });
-
-  // ===== BK（9〜15）=====
-  // 9,10 縦並び（中央レーン）
-  A.push({ x: L(0.48), y: cy - 0.04, role:'BK', no: 9, color:BK });
-  A.push({ x: L(0.46), y: cy + 0.04, role:'BK', no:10, color:BK });
-
-  // 11,12,13 三人横一列
-  A.push({ x: L(0.38), y: cy + 0.18, role:'BK', no:11, color:BK });
-  A.push({ x: L(0.42), y: cy + 0.18, role:'BK', no:12, color:BK });
-  A.push({ x: L(0.46), y: cy + 0.18, role:'BK', no:13, color:BK });
-
-  // 14（右WTB）
-  A.push({ x: L(0.48), y: cy + 0.24, role:'BK', no:14, color:BK });
-  // 15（FB）
-  A.push({ x: L(0.44), y: cy + 0.30, role:'BK', no:15, color:BK });
-}
-   else {
-    // ===== 12人制（元のロジックを軽調整して流用）=====
-    // 1,2,3（横）
-    A.push(...gridLine(leftBand + 0.30, cy - 1*dy, 0.04, 3, 'FW', 1, FW));
-    // 4,5（縦）
-    A.push({ x: leftBand + 0.30, y: cy + 0.00, role:'FW', no:4, color:FW });
-    A.push({ x: leftBand + 0.34, y: cy + 0.00, role:'FW', no:5, color:FW });
-    // 6（上外）
-    A.push({ x: leftBand + 0.06, y: cy - 2*dy, role:'FW', no:6, color:FW });
-    // 7,8 は 12人制では除外
-    // 9,10
-    A.push({ x: leftBand + 0.46, y: cy - 0.04, role:'BK', no:9,  color:BK });
-    A.push({ x: leftBand + 0.50, y: cy + 0.04, role:'BK', no:10, color:BK });
-    // 11,12,13 横
-    A.push(...gridLine(leftBand + 0.38, cy + 0.18, 0.04, 3, 'BK', 11, BK));
-    // 14,15 は 12人制では除外
+  function segmentsNear(a,b,c,d,radius){
+    if(Math.max(a.x,b.x)+radius<Math.min(c.x,d.x)||Math.min(a.x,b.x)-radius>Math.max(c.x,d.x)||Math.max(a.y,b.y)+radius<Math.min(c.y,d.y)||Math.min(a.y,b.y)-radius>Math.max(c.y,d.y))return false;
+    const ux=b.x-a.x,uy=b.y-a.y,vx=d.x-c.x,vy=d.y-c.y,den=ux*vy-uy*vx;
+    if(Math.abs(den)>1e-9){const t=((c.x-a.x)*vy-(c.y-a.y)*vx)/den,u=((c.x-a.x)*uy-(c.y-a.y)*ux)/den;if(t>=0&&t<=1&&u>=0&&u<=1)return true;}
+    return Math.min(pointSegmentDistance2(a,c,d),pointSegmentDistance2(b,c,d),pointSegmentDistance2(c,a,b),pointSegmentDistance2(d,a,b))<=radius*radius;
   }
-
-  // ベンチ（16〜23）— 下に白で並べる（既存の描画で色白＆番号表示）
-  const BENCH_N = (unit === 12) ? 6 : 8;
-  const startNo = unit + 1;        // 12なら13から、15なら16から
-  for (let i = 0; i < BENCH_N; i++){
-    const no = startNo + i;
-    // 画面下に横一列
-    const x = 0.08 + i * 0.04;
-    const y = 0.92;
-    A.push({ x, y, role:'BENCH', no, color: BENCH });
-  }
-  return A;
-}
-
-  function makeOpponents(unit){
-    const PURPLE = '#8e44ad';
-    return makeAllies(unit)
-    .filter(p => p.role !== 'BENCH')
-    
-    // role（FW/BK）は維持したまま、色と左右反転だけ変える
-    .map(p => ({ x: 1 - p.x, y: p.y, role: p.role, no: p.no, color: PURPLE }));
-  }
-
-  function reset(unit = state.unit){
-    state.unit = unit;
-    state.allies = makeAllies(unit);
-    state.opps   = makeOpponents(unit);
-    state.bench  = state.allies.filter(p => p.role === 'BENCH');
-    state.allies = state.allies.filter(p => p.role !== 'BENCH');
-
-    // 12人のときは 6,7,8 を外す（FW）
-    if (unit === 12){
-      const drop = new Set([6,7,8]);
-      state.allies = state.allies.filter(p => !drop.has(p.no));
-      state.opps   = state.opps  .filter(p => !drop.has(p.no));
-    }
-
-    state.arrows = [];
-    state.hover  = state.dragging = state.drawingArrow = null;
-    state.draggingBall = false;
-    state.ball   = { x: 0.50, y: 0.50 };
-
-    render();
-  }
-
-  // ===== API 露出 =====
-  window.BoardAPI = {
-    reset,
-    setView(v){ state.view = (v==='FW'||v==='BK') ? v : 'ALL'; render(); },
-    setSide(s){ state.side = (s==='ALLY'||s==='OPP') ? s : 'BOTH'; render(); },
-    setTool(t){ state.tool = (t==='arrow'||t==='ball') ? t : 'move'; },
-    getState(){ return {
-      unit:state.unit, view:state.view, side:state.side,
-      allies:state.allies, opps:state.opps, arrows:state.arrows, ball:state.ball
-    }; },
-    setState(s={}){
-      if (s.unit) state.unit = s.unit;
-      if (s.view) state.view = s.view;
-      if (s.side) state.side = s.side;
-      if (Array.isArray(s.allies)) state.allies = s.allies;
-      if (Array.isArray(s.opps))   state.opps   = s.opps;
-      if (Array.isArray(s.arrows)) state.arrows = s.arrows;
-      if (s.ball) state.ball = s.ball;
-      render();
-    }
-  };
-
-  // ===== ツールバー（index.html の .controls）=====
-  const controls = document.querySelector('.controls');
-  controls?.addEventListener('click', (e)=>{
-    const btn = e.target.closest('[data-tool]'); if(!btn) return;
-    controls.querySelectorAll('[data-tool].active').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    window.BoardAPI.setTool(btn.dataset.tool);
-  });
-
-  // mousemove
-canvas.addEventListener('mousemove', (e) => {
-  const {px, py, nx, ny} = getPointer(e);
-
-  // 矢印描画中
-  if (state.drawingArrow){
-    state.drawingArrow.now = { x:nx, y:ny };
-    render(); return;
-  }
-  // ボールドラッグ中
-  if (state.draggingBall){
-    state.ball = { x:nx, y:ny };
-    render(); return;
-  }
-  // プレイヤードラッグ中（ALLY / OPP / BENCH）
-  if (state.dragging != null){
-    const list =
-      state.dragging.side === 'ALLY' ? state.allies :
-      state.dragging.side === 'OPP'  ? state.opps   :
-      state.bench;
-    const p = list[state.dragging.idx];
-    p.x = nx; p.y = ny;
-    render(); return;
-  }
-
-  // ---- ホバー判定（ここは関数の中）----
-  let h = null;
-  const viewFilter = p => state.view === 'ALL' ? true : p.role === state.view;
-
-  if (state.side !== 'OPP'){
-    const i = hit(state.allies, px, py, viewFilter);
-    if (i != null) h = { side:'ALLY', idx:i };
-  }
-  if (!h && state.side !== 'ALLY'){
-    const i = hit(state.opps, px, py, viewFilter);
-    if (i != null) h = { side:'OPP', idx:i };
-  }
-  // ベンチは ALL の時だけ触れる
-  if (!h && state.view === 'ALL'){
-    const i = hit(state.bench, px, py);
-    if (i != null) h = { side:'BENCH', idx:i };
-  }
-
-  state.hover = h;
-  canvas.style.cursor = h ? 'grab' : 'default';
-  render();
-});
-
-// mousedown
-canvas.addEventListener('mousedown', (e) => {
-   const {px, py, nx, ny} = getPointer(e);
-
-  if (state.tool==='arrow'){
-    // ★正規化で開始/現在を持つ
-    state.drawingArrow = { start:{x:nx,y:ny}, now:{x:nx,y:ny} };
-    render();
-    return;
-  }
-  if (state.tool==='ball' && hitBall(px,py)){
-    state.draggingBall = true;
-    pushHistory();              // ★直前保存
-    render();
-    return;
-  }
-  if (state.hover){             // プレイヤー掴む
-    state.dragging = state.hover;
-    pushHistory();              // ★直前保存
-    render();
-  }
-});
-
-// mouseup
-canvas.addEventListener('mouseup', (e) => {
-  if (state.dragging){ state.dragging=null; render(); return; }
-  if (state.draggingBall){ state.draggingBall=false; render(); return; }
-  if (state.drawingArrow){
-    // ★矢印確定（正規化のまま配列へ）
-    state.arrows.push({ from: state.drawingArrow.start, to: state.drawingArrow.now });
-    state.drawingArrow = null;
-    pushHistory();              // ★直前保存（確定したので）
-    render(); return;
-  }
-});
-
-  // ★ ダブルクリック：番号だけ編集（名前は無し）
-  canvas.addEventListener('dblclick', (e)=>{
-    const {px, py} = getPointer(e);   // ★DPR対応
-    let side='ALLY', idx = hit(state.allies, px, py);
-    if (idx==null){ side='OPP'; idx = hit(state.opps, px, py); }
-    if (idx==null) return;
-    const list = (side==='ALLY') ? state.allies : state.opps;
-    const p = list[idx];
-    const no = prompt('背番号（空欄で変更しない）', p.no ?? '');
-    if (no==null || no.trim()==='') return;
-    if (!/^\d+$/.test(no.trim())) { alert('数字を入れてください'); return; }
-    p.no = Number(no.trim());
-    render();
-  });
-
-  // 右クリックのメニュー抑止（矢印描画で使う場合の保険）
-  canvas.addEventListener('contextmenu', (e)=> e.preventDefault());
-
-  // 外部セレクト（index.htmlの#sideSelect等があれば拾う）
-  document.getElementById('sideSelect')?.addEventListener('change', (e)=>{
-  window.BoardAPI.setSide(e.target.value);
-  });
-
-  // === 名簿UI ===（IIFEの“中”に置く）========================
-  const rosterEl = document.getElementById('roster');
-
-  // 初期表示
-function initBoard(){
-  fitCanvasToCss();
-  reset(15);
-  render();
-}
-
-window.addEventListener('load', () => {
-  initBoard();
-  if ('ResizeObserver' in window) {
-    const ro = new ResizeObserver(() => { fitCanvasToCss(); render(); });
-    ro.observe(canvas.parentElement || canvas);
-  }
-});
-
-// DOM 準備ができてから初期化
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initBoard, { once:true });
-} else {
-  initBoard();
-}
-
-function currentPlayersForRoster(){
-  const viewFilter = p => state.view === 'ALL' ? true : p.role === state.view;
-
-  // 味方のみ
-  let rows = state.allies.filter(viewFilter).map(p => ({...p, side:'ALLY'}));
-
-  // ベンチは「全員表示」かつ「相手のみでない」時だけ足す
-  if (state.view === 'ALL' && state.side !== 'OPP'){
-    rows = rows.concat(state.bench.map(p => ({...p, side:'BENCH'})));
-  }
-
-  // 番号昇順
-  rows.sort((a,b)=> (a.no??999)-(b.no??999));
-  return rows;
-}
-
-function renderRoster(){
-  if (!rosterEl) return;
-  rosterEl.innerHTML = ''; // 全消去して再構築
-
-  const rows = currentPlayersForRoster();
-  rows.forEach((p) => {
-    const item = document.createElement('div');
-    item.className = 'item';
-
-    // マーカー（番号付き丸）
-    const marker = document.createElement('div');
-    marker.className = 'marker';
-    marker.style.setProperty('--color', p.color);
-    marker.textContent = p.no ?? '';
-
-    // 白いマーカーのときだけ文字色を黒に
-    if (p.color === '#fff' || p.color.toLowerCase()==='white'){
-      marker.classList.add('is-white');
-    }
-
-    // 名前入力欄
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = p.name ?? '';
-    input.placeholder = '選手名';
-    input.addEventListener('input', () => {
-      const list =
-        p.side === 'ALLY' ? state.allies :
-        p.side === 'OPP'  ? state.opps   :
-        state.bench;
-      const i = list.findIndex(x => x.no === p.no && x.role === p.role);
-      if (i >= 0) list[i].name = input.value.trim();
+  function eraseInk(from,to){
+    const count=state.strokes.length;
+    state.strokes=state.strokes.filter(stroke=>{
+      const radius=12/viewport.scale+inkWidth(stroke)/2;
+      for(let i=0;i<stroke.points.length;i++){const a=screen(stroke.points[Math.max(0,i-1)]),b=screen(stroke.points[i]);if(segmentsNear(from,to,a,b,radius))return false;}
+      return true;
     });
-
-    item.appendChild(marker);
-    item.appendChild(input);
-    rosterEl.appendChild(item);
-  });
-}
- 
-// === タッチ→マウス変換（スマホ対応） ===
-function touchHandler(event) {
-  const touches = event.changedTouches;
-  if (!touches || touches.length === 0) return;
-
-  const t = touches[0];
-  let type = "";
-  if (event.type === "touchstart") type = "mousedown";
-  if (event.type === "touchmove")  type = "mousemove";
-  if (event.type === "touchend")   type = "mouseup";
-
-  if (type) {
-    const simulatedEvent = new MouseEvent(type, {
-      bubbles: true,
-      clientX: t.clientX,
-      clientY: t.clientY
-    });
-    // キャンバスへディスパッチ
-    canvas.dispatchEvent(simulatedEvent);
+    return count!==state.strokes.length;
   }
+  function appendInk(e){
+    const active=interaction;if(active?.kind!=='pen'||active.limited)return;
+    const events=typeof e.getCoalescedEvents==='function'?e.getCoalescedEvents():[];
+    for(const event of [...events,e]){
+      const p=inkPoint(field(pointer(event))),previous=screen(active.stroke.points.at(-1)),next=screen(p);
+      if(Math.hypot(next.x-previous.x,next.y-previous.y)*viewport.scale<1.2)continue;
+      if(active.stroke.points.length>=active.room){active.limited=true;inkNotice=active.room===INK_LIMITS.pointsPerStroke?'この線は長さの上限です。指を離して続きを描いてください。':'落書きの上限に達しました。指を離し、線を消すか別のプレーに描いてください。';syncUI();break;}
+      active.stroke.points.push(p);
+    }
+  }
+  function clearStrokes(){
+    if(readOnly)return;
+    cancelInteraction();if(!state.strokes.length)return;
+    remember(snapshot());state.strokes=[];inkNotice='';syncUI();redraw();changed('ink-clear');
+  }
+  function startGesture() {
+    // Roll back a first-finger drag before starting a two-finger viewport gesture.
+    if(interaction){const before=interaction.before;interaction=null;if(before)Object.assign(state,before);renderRoster();}
+    const [a,b]=[...pointers.values()];
+    const center={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+    gesture={distance:Math.max(1,Math.hypot(a.x-b.x,a.y-b.y)),scale:viewport.scale,anchor:{x:(center.x-viewport.x)/viewport.scale,y:(center.y-viewport.y)/viewport.scale}};
+    canvas.classList.remove('is-dragging');redraw();
+  }
+  function moveGesture() {
+    if(!gesture||pointers.size<2)return;
+    const [a,b]=[...pointers.values()],center={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+    viewport.scale=clamp(gesture.scale*Math.hypot(a.x-b.x,a.y-b.y)/gesture.distance,1,4);
+    viewport.x=center.x-gesture.anchor.x*viewport.scale;viewport.y=center.y-gesture.anchor.y*viewport.scale;clampViewport();syncZoom();redraw();
+  }
+  function onPointerDown(e) {
+    if(e.pointerType==='mouse'&&e.button!==0)return;
+    if(!fit())return;
+    pointers.set(e.pointerId,rawPointer(e));canvas.setPointerCapture(e.pointerId);
+    if(pointers.size===2){startGesture();e.preventDefault();return;}
+    if(gesture||pointers.size>2||interaction)return;
+    const start=pointer(e), before=snapshot();
+    if(!readOnly&&state.tool==='pen'){
+      inkNotice='';
+      const room=Math.min(INK_LIMITS.pointsPerStroke,INK_LIMITS.totalPoints-state.strokes.reduce((sum,s)=>sum+s.points.length,0));
+      if(state.strokes.length>=INK_LIMITS.strokes||room<1){inkNotice='落書きの上限です。線を消すか、別のプレーに描いてください。';syncUI();pointers.delete(e.pointerId);canvas.releasePointerCapture(e.pointerId);e.preventDefault();return;}
+      interaction={kind:'pen',pointerId:e.pointerId,before,start,room,stroke:{points:[inkPoint(field(start))],color:state.penColor,width:state.penWidth}};
+    } else if(!readOnly&&state.tool==='inkErase'){
+      interaction={kind:'inkErase',pointerId:e.pointerId,before,start,last:start,erased:eraseInk(start,start)};
+    } else if(!readOnly&&state.tool==='erase') {
+      interaction={kind:'erase',pointerId:e.pointerId,before,start,index:hitArrow(start)};
+    } else if(!readOnly&&state.tool==='arrow') {
+      const p=point(field(start));
+      interaction={kind:'arrow',pointerId:e.pointerId,before,start,arrow:{from:p,to:{...p},color:state.arrowColor}};
+    } else {
+      const target=readOnly?null:state.tool==='ball'?{kind:'ball'}:pick(start,e.pointerType);
+      if(!target){if(viewport.scale>1)interaction={kind:'pan',pointerId:e.pointerId,start:rawPointer(e),x:viewport.x,y:viewport.y};return;}
+      const position=target.kind==='ball'?screen(state.ball):screen(target.p);
+      interaction={kind:target.kind,pointerId:e.pointerId,before,start,target,offset:{x:position.x-start.x,y:position.y-start.y}};
+      if(state.tool==='ball'&&Math.hypot(position.x-start.x,position.y-start.y)>metrics.radius*1.8) {
+        interaction.offset={x:0,y:0};state.ball=point(field(boundedScreen(start)));
+      }
+    }
+    canvas.setPointerCapture(e.pointerId);canvas.classList.add('is-dragging');e.preventDefault();redraw();
+  }
+  function moveInteraction(e) {
+    if(!interaction||e.pointerId!==interaction.pointerId)return;
+    const p=pointer(e);
+    if(interaction.kind==='pan'){const raw=rawPointer(e);viewport.x=interaction.x+raw.x-interaction.start.x;viewport.y=interaction.y+raw.y-interaction.start.y;clampViewport();}
+    else if(interaction.kind==='pen')appendInk(e);
+    else if(interaction.kind==='inkErase'){interaction.erased=eraseInk(interaction.last,p)||interaction.erased;interaction.last=p;}
+    else if(interaction.kind==='erase'){}
+    else if(interaction.kind==='arrow') interaction.arrow.to=point(field(boundedScreen(p,3)));
+    else {
+      const next=point(field(boundedScreen({x:p.x+interaction.offset.x,y:p.y+interaction.offset.y})));
+      if(interaction.kind==='ball')state.ball=next;else Object.assign(interaction.target.p,next);
+    }
+    e.preventDefault();redraw();
+  }
+  function onPointerMove(e) {
+    if(pointers.has(e.pointerId))pointers.set(e.pointerId,rawPointer(e));
+    if(gesture){moveGesture();e.preventDefault();return;}
+    if(interaction){moveInteraction(e);return;}
+    if(e.pointerType==='mouse')canvas.style.cursor=['arrow','pen','inkErase'].includes(state.tool)?'crosshair':pick(pointer(e),'mouse')?'grab':'default';
+  }
+  function finishInteraction(e) {
+    pointers.delete(e.pointerId);
+    if(gesture){if(!pointers.size)gesture=null;if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);redraw();return;}
+    if(!interaction||interaction.pointerId!==e.pointerId){if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);return;}
+    moveInteraction(e);
+    const active=interaction;
+    let committed=false;
+    if(active.kind==='pan'){}
+    else if(active.kind==='pen'){remember(active.before);state.strokes.push(clone(active.stroke));committed=true;}
+    else if(active.kind==='inkErase'){if(active.erased){remember(active.before);committed=true;}}
+    else if(active.kind==='erase') {
+      const p=pointer(e);
+      if(active.index!==null&&hitArrow(p)===active.index&&Math.hypot(p.x-active.start.x,p.y-active.start.y)*viewport.scale<16){remember(active.before);state.arrows.splice(active.index,1);committed=true;}
+    } else if(active.kind==='arrow') {
+      const a=screen(active.arrow.from),b=screen(active.arrow.to);
+      if(Math.hypot(a.x-b.x,a.y-b.y)*viewport.scale>=8){remember(active.before);state.arrows.push(clone(active.arrow));committed=true;}
+    } else if(JSON.stringify(active.before)!==JSON.stringify(snapshot())){remember(active.before);committed=true;}
+    interaction=null;canvas.classList.remove('is-dragging');
+    if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
+    syncUI();redraw();if(committed)changed(active.kind);
+  }
+  function cancelInteraction(e) {
+    if(!interaction||(e&&e.pointerId!==interaction.pointerId))return;
+    const active=interaction;interaction=null;if(active.before)Object.assign(state,active.before);
+    pointers.delete(active.pointerId);
+    canvas.classList.remove('is-dragging');
+    if(canvas.hasPointerCapture(active.pointerId))canvas.releasePointerCapture(active.pointerId);
+    syncUI();renderRoster();redraw();
+  }
+  canvas.addEventListener('pointerdown',onPointerDown);
+  canvas.addEventListener('pointermove',onPointerMove);
+  canvas.addEventListener('pointerup',finishInteraction);
+  const pointerCancelled=e=>{pointers.delete(e.pointerId);if(gesture){if(!pointers.size)gesture=null;return;}cancelInteraction(e);};
+  canvas.addEventListener('pointercancel',pointerCancelled);
+  canvas.addEventListener('lostpointercapture',pointerCancelled);
+  canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  canvas.addEventListener('dblclick',e=>{
+    if(readOnly||!['move','ball'].includes(state.tool))return;
+    const target=pick(pointer(e));
+    if(target?.kind!=='player')return;
+    const result=prompt('背番号（1〜99）',target.p.no);
+    if(result===null||result.trim()==='')return;
+    if(!/^\d{1,2}$/.test(result)||Number(result)<1){alert('1〜99の数字を入力してください');return;}
+    remember(snapshot());target.p.no=Number(result);renderRoster();redraw();changed('number');
+  });
 
-  // 画面スクロールを抑止（ドラッグ優先）
-  event.preventDefault();
-}
-
-// タッチイベント登録（passive:false で preventDefault を有効化）
-canvas.addEventListener("touchstart", touchHandler, { passive: false });
-canvas.addEventListener("touchmove",  touchHandler, { passive: false });
-canvas.addEventListener("touchend",   touchHandler, { passive: false });
-
-// リサイズ時はサイズを合わせてから再描画
-window.addEventListener('resize', () => {
-  fitCanvasToCss();
-  render();
-});
-
-  })(); // ← IIFE はここで閉じる（名簿も含めて中に入っていること）
-  // タッチをマウスイベントに変換するユーティリティ
+  function renderRoster() {
+    const roster=$('roster');if(!roster)return;
+    roster.replaceChildren();
+    const players=state.side==='OPP'?state.opps:state.allies;
+    const rows=players.filter(p=>state.view==='ALL'||state.view===p.role);
+    if(state.side!=='OPP'&&state.view==='ALL')rows.push(...state.bench);
+    [...rows].sort((a,b)=>Number(a.no)-Number(b.no)).forEach(p=>{
+      const item=document.createElement('label');item.className='item';
+      const marker=document.createElement('span');marker.className='marker';marker.style.setProperty('--color',p.color);marker.textContent=String(p.no);
+      const ink = p.role==='BENCH' ? '#17202b' : markerInk(p.color);
+      marker.style.backgroundColor=p.color;
+      marker.style.color=ink;
+      if(ink==='#17202b')marker.classList.add('is-white');
+      const input=document.createElement('input');input.type='text';input.value=p.name||'';input.placeholder='選手名';input.setAttribute('aria-label',`${state.side==='OPP'?'相手':'自チーム'} ${p.no}番の名前`);
+      input.disabled=readOnly;input.addEventListener('input',()=>{p.name=input.value;changed('name');});
+      item.append(marker,input);roster.append(item);
+    });
+  }
+  function syncUI() {
+    if($('unitSelect'))$('unitSelect').value=String(state.unit);
+    if($('groupSelect'))$('groupSelect').value=state.view;
+    if($('sideSelect'))$('sideSelect').value=state.side;
+    if($('courtSelect'))$('courtSelect').value=state.court;
+    document.querySelector('.board-section')?.classList.toggle('is-half-court',state.court==='HALF');
+    if($('undoBtn'))$('undoBtn').disabled=readOnly||history.length===0;
+    if($('redoBtn'))$('redoBtn').disabled=readOnly||future.length===0;
+    if($('tvUndoBtn'))$('tvUndoBtn').disabled=readOnly||history.length===0;
+    if($('tvRedoBtn'))$('tvRedoBtn').disabled=readOnly||future.length===0;
+    if($('clearInkBtn'))$('clearInkBtn').disabled=readOnly||state.strokes.length===0;
+    document.querySelectorAll('[data-tool]').forEach(b=>{
+      const active=b.dataset.tool===state.tool;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));
+    });
+    if($('arrowOptions'))$('arrowOptions').hidden=state.tool!=='arrow';
+    let label='カスタム';
+    document.querySelectorAll('[data-arrow-color]').forEach(b=>{
+      const active=b.dataset.arrowColor.toLowerCase()===state.arrowColor.toLowerCase();b.setAttribute('aria-pressed',String(active));if(active)label=b.dataset.colorName;
+    });
+    if($('arrowColorName'))$('arrowColorName').textContent=label;
+    if($('arrowColor')&&/^#[0-9a-f]{6}$/i.test(state.arrowColor))$('arrowColor').value=state.arrowColor;
+    if($('penOptions'))$('penOptions').hidden=!['pen','inkErase'].includes(state.tool);
+    if($('penColor')&&/^#[0-9a-f]{6}$/i.test(state.penColor))$('penColor').value=state.penColor;
+    if($('penWidth'))$('penWidth').value=String(state.penWidth);
+    document.querySelectorAll('[data-pen-color]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.penColor.toLowerCase()===state.penColor.toLowerCase())));
+    const penHint=state.tool==='inkErase'?'落書きをなぞると、線ごと消えます。選手と矢印は消しません。':'指・ペン・マウスで手書き。2本指では描かずに拡大・移動します。';
+    if($('penHint'))$('penHint').textContent=inkNotice||penHint;
+    if($('boardHint'))$('boardHint').textContent=['pen','inkErase'].includes(state.tool)?(inkNotice||penHint):state.tool==='erase'?'消したい矢印をタップ。「戻る」で取り消せます。':state.tool==='arrow'?'ドラッグで矢印。2本指で拡大・移動できます。':state.tool==='ball'?'ボールをドラッグ、または置きたい場所をタップ。':'選手をドラッグ。2本指で盤面を拡大・移動。盤面の外でページをスクロール。';
+  }
+  function setTool(t) {
+    cancelInteraction();inkNotice='';state.tool=['arrow','ball','erase','pen','inkErase'].includes(t)?t:'move';syncUI();redraw();
+  }
+  function setArrowColor(value) {
+    state.arrowColor=color(value);syncUI();redraw();
+  }
+  function setPenColor(value){state.penColor=color(value,'#ffffff');syncUI();}
+  function setPenWidth(value){state.penWidth=[2,4,8].includes(Number(value))?Number(value):4;syncUI();}
+  function setView(v) {
+    cancelInteraction();state.view=['FW','BK'].includes(v)?v:'ALL';syncUI();renderRoster();redraw();
+  }
+  function setSide(v) {
+    cancelInteraction();state.side=['ALLY','OPP'].includes(v)?v:'BOTH';syncUI();renderRoster();redraw();
+  }
+  function setCourt(value) {
+    if(readOnly)return;
+    cancelInteraction();
+    const next = value==='HALF' ? 'HALF' : 'FULL';
+    if (next===state.court) return;
+    remember(snapshot());state.court=next;syncUI();redraw();
+    changed('court');
+  }
+  function toggleFocus(force) {
+    cancelInteraction();
+    const focused=typeof force==='boolean'?force:!document.body.classList.contains('board-focus');
+    document.body.classList.toggle('board-focus',focused);
+    const button=$('focusBoardBtn');if(button){button.textContent=focused?'拡大を閉じる':'盤面を拡大';button.setAttribute('aria-pressed',String(focused));}
+    redraw();
+  }
+  function fullscreenElement(){return document.fullscreenElement||document.webkitFullscreenElement||null;}
+  function syncPresentation(){
+    if($('fullscreenBoardBtn'))$('fullscreenBoardBtn').setAttribute('aria-pressed',String(presentation.active));
+    if($('tvHeader'))$('tvHeader').hidden=!presentation.active;
+    if($('tvModeLabel'))$('tvModeLabel').textContent=presentation.native?'TV / 全画面表示':'TV / 画面内表示';
+    if($('tvPlayTitle'))$('tvPlayTitle').textContent=$('playTitle')?.value.trim()||'ラグビー戦術ノート';
+    if($('tvCourtLabel'))$('tvCourtLabel').textContent=(state.court==='HALF'?'半コート':'全コート')+' · '+(state.tool==='pen'?'自由に手書き':state.tool==='inkErase'?'落書きを線ごと消去':'選手をドラッグして移動')+' · Escで終了';
+  }
+  function fitPresentation(){
+    syncPresentation();
+    const rect=boardSection.getBoundingClientRect();
+    const style=window.getComputedStyle?.(boardSection);
+    const padding=name=>parseFloat(style?.[name])||12;
+    const width=boardSection.clientWidth||rect.width||window.innerWidth||metrics.width;
+    const height=boardSection.clientHeight||rect.height||window.innerHeight;
+    const headerHeight=$('tvHeader')?.getBoundingClientRect().height||56;
+    const penOptions=$('penOptions'),optionsHeight=penOptions&&!penOptions.hidden?(penOptions.getBoundingClientRect().height+10):0;
+    const availableWidth=Math.max(1,width-padding('paddingLeft')-padding('paddingRight')-2);
+    const availableHeight=Math.max(1,height-padding('paddingTop')-padding('paddingBottom')-headerHeight-optionsHeight-12);
+    // Account for the container border. Do not stretch or crop either court.
+    boardContainer.style.width=(Math.min(availableWidth,availableHeight*canvasRatio(false))+2)+'px';
+  }
+  async function leaveNativeFullscreen(){
+    if(fullscreenElement()!==boardSection)return;
+    try{
+      const exit=document.exitFullscreen||document.webkitExitFullscreen;
+      if(exit)await exit.call(document);
+    }catch{/* Browser/OS may already be leaving fullscreen. */}
+  }
+  async function enterPresentation(){
+    if(!boardSection||presentation.active||presentation.pending||presentation.exiting)return;
+    cancelInteraction();
+    presentation.previousFocus=document.body.classList.contains('board-focus');
+    presentation.previousTool=state.tool;
+    presentation.returnFocus=document.activeElement||$('fullscreenBoardBtn');
+    presentation.containerWidth=boardContainer.style.width||'';
+    presentation.background=[$('appHeader'),document.querySelector('.sidebar')].filter(Boolean).map(element=>({element,inert:element.inert}));
+    presentation.background.forEach(({element})=>{element.inert=true;});
+    toggleFocus(false);
+    presentation.active=true;presentation.native=false;
+    document.body.classList.add('tv-mode');boardSection.classList.add('is-tv-mode');
+    resetViewport(false);setTool('move');syncPresentation();
+    $('exitFullscreenBtn')?.focus({preventScroll:true});
+    // Invoke synchronously from the click to preserve browser user activation.
+    const request=typeof boardSection.requestFullscreen==='function'&&document.fullscreenEnabled!==false
+      ? ()=>boardSection.requestFullscreen({navigationUI:'hide'})
+      : typeof boardSection.webkitRequestFullscreen==='function'&&document.webkitFullscreenEnabled!==false
+        ? ()=>boardSection.webkitRequestFullscreen() : null;
+    if(!request)return;
+    presentation.pending=true;
+    if($('fullscreenBoardBtn'))$('fullscreenBoardBtn').disabled=true;
+    try{
+      await request();
+      if(!presentation.active){await leaveNativeFullscreen();return;}
+      presentation.native=fullscreenElement()===boardSection;
+    }catch{
+      // Unsupported, denied or embedded: keep a usable page-filling TV view.
+      if(presentation.active)presentation.native=false;
+    }finally{
+      presentation.pending=false;
+      if($('fullscreenBoardBtn'))$('fullscreenBoardBtn').disabled=presentation.exiting;
+      syncPresentation();redraw();
+    }
+  }
+  async function exitPresentation({restoreFocus=true,restoreFocusMode=true}={}){
+    if(!presentation.active)return leaveNativeFullscreen();
+    cancelInteraction();presentation.active=false;presentation.native=false;
+    document.body.classList.remove('tv-mode');boardSection.classList.remove('is-tv-mode');
+    boardContainer.style.width=presentation.containerWidth;
+    presentation.background.forEach(({element,inert})=>{element.inert=inert;});presentation.background=[];
+    resetViewport(false);setTool(presentation.previousTool);
+    toggleFocus(restoreFocusMode&&presentation.previousFocus);syncPresentation();
+    const returnFocus=presentation.returnFocus;
+    presentation.exiting=fullscreenElement()===boardSection;
+    if($('fullscreenBoardBtn'))$('fullscreenBoardBtn').disabled=presentation.pending||presentation.exiting;
+    try{await leaveNativeFullscreen();}finally{
+      presentation.exiting=false;
+      if($('fullscreenBoardBtn'))$('fullscreenBoardBtn').disabled=presentation.pending;
+      if(restoreFocus&&!presentation.active)returnFocus?.focus({preventScroll:true});
+    }
+  }
+  function fullscreenChanged(){
+    if(fullscreenElement()===boardSection){
+      if(!presentation.active){void leaveNativeFullscreen();return;}
+      presentation.native=true;syncPresentation();redraw();
+    }else if(presentation.active&&presentation.native){
+      void exitPresentation();
+    }
+  }
+  document.querySelector('.controls')?.addEventListener('click',e=>{const button=e.target.closest('[data-tool]');if(button)setTool(button.dataset.tool);});
+  $('tvTools')?.addEventListener('click',e=>{const button=e.target.closest('[data-tool]');if(button)setTool(button.dataset.tool);});
+  $('arrowPalette')?.addEventListener('click',e=>{const b=e.target.closest('[data-arrow-color]');if(b)setArrowColor(b.dataset.arrowColor);});
+  $('arrowColor')?.addEventListener('input',e=>setArrowColor(e.target.value));
+  $('penPalette')?.addEventListener('click',e=>{const b=e.target.closest('[data-pen-color]');if(b)setPenColor(b.dataset.penColor);});
+  $('penColor')?.addEventListener('input',e=>setPenColor(e.target.value));
+  $('penWidth')?.addEventListener('change',e=>setPenWidth(e.target.value));
+  $('clearInkBtn')?.addEventListener('click',clearStrokes);
+  $('undoBtn')?.addEventListener('click',undo);
+  $('redoBtn')?.addEventListener('click',redo);
+  $('tvUndoBtn')?.addEventListener('click',undo);
+  $('tvRedoBtn')?.addEventListener('click',redo);
+  $('zoomInBtn')?.addEventListener('click',()=>zoomTo(viewport.scale*1.25));
+  $('zoomOutBtn')?.addEventListener('click',()=>zoomTo(viewport.scale/1.25));
+  $('zoomResetBtn')?.addEventListener('click',()=>resetViewport());
+  $('unitSelect')?.addEventListener('change',e=>reset(e.target.value));
+  $('groupSelect')?.addEventListener('change',e=>setView(e.target.value));
+  $('sideSelect')?.addEventListener('change',e=>setSide(e.target.value));
+  $('courtSelect')?.addEventListener('change',e=>setCourt(e.target.value));
+  $('resetPositions')?.addEventListener('click',()=>reset(state.unit));
+  $('focusBoardBtn')?.addEventListener('click',()=>toggleFocus());
+  $('fullscreenBoardBtn')?.addEventListener('click',()=>{void enterPresentation();});
+  $('exitFullscreenBtn')?.addEventListener('click',()=>{void exitPresentation();});
+  $('tvResetViewBtn')?.addEventListener('click',()=>resetViewport());
+  $('playTitle')?.addEventListener('input',syncPresentation);
+  document.addEventListener('fullscreenchange',fullscreenChanged);
+  document.addEventListener('webkitfullscreenchange',fullscreenChanged);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){if(presentation.active)void exitPresentation();else toggleFocus(false);}
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&e.target===canvas){e.preventDefault();undo();}
+  });
+  window.addEventListener('resize',redraw);
+  window.addEventListener('scroll',repaintAfterScroll,{passive:true});
+  window.addEventListener('orientationchange',restoreDrawing);
+  window.addEventListener('pageshow',restoreDrawing);
+  window.visualViewport?.addEventListener('resize',repaintAfterScroll,{passive:true});
+  window.visualViewport?.addEventListener('scroll',repaintAfterScroll,{passive:true});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)restoreDrawing();});
+  // Safari can discard the backing store while scrolling or switching apps.
+  // State is kept outside the canvas; rebuild the entire scene on restoration.
+  canvas.addEventListener('contextrestored',restoreDrawing);
+  if(mobileQuery.addEventListener)mobileQuery.addEventListener('change',redraw);
+  if('ResizeObserver' in window)new ResizeObserver(redraw).observe(canvas);
+  function setReadOnly(value){readOnly=!!value;if(readOnly)cancelInteraction();syncUI();renderRoster();}
+  async function exportPNG({title='',notes=''}={}) {
+    const scene=document.createElement('canvas');scene.width=1400;scene.height=Math.round(1400/canvasRatio(false));
+    const original={ctx,metrics:{...metrics},viewport:{...viewport}};
+    try {
+      ctx=scene.getContext('2d');Object.assign(metrics,{width:scene.width,height:scene.height,portrait:false,radius:18});
+      viewport.scale=1;viewport.x=viewport.y=0;render();
+    } finally {ctx=original.ctx;Object.assign(metrics,original.metrics);Object.assign(viewport,original.viewport);}
+    const out=document.createElement('canvas'),o=out.getContext('2d'),lines=[];
+    o.font='24px sans-serif';
+    for(const paragraph of String(notes).split('\n')) {
+      let line='';for(const character of paragraph){if(o.measureText(line+character).width>1320){lines.push(line);line='';}line+=character;}lines.push(line);
+    }
+    const visible=lines.slice(0,8);if(lines.length>8)visible[7]+='…';
+    out.width=1400;out.height=scene.height+100+(notes?visible.length*32+32:0);
+    o.fillStyle='#0c1521';o.fillRect(0,0,out.width,out.height);o.fillStyle='#edf4f8';o.font='700 32px sans-serif';
+    o.fillText(String(title||'ラグビー戦術ノート').slice(0,60),36,54,1328);o.drawImage(scene,0,100);
+    o.font='24px sans-serif';visible.forEach((line,i)=>{if(notes)o.fillText(line,36,scene.height+140+i*32);});
+    return new Promise((resolve,reject)=>out.toBlob(blob=>blob?resolve(blob):reject(new Error('画像を書き出せませんでした')),'image/png'));
+  }
+  window.BoardAPI={reset,setView,setSide,setCourt,setTool,setArrowColor,setPenColor,setPenWidth,clearStrokes,getState:snapshot,setState,redraw,undo,redo,applyTemplate,getInitialState,setReadOnly,exportPNG,zoomTo,resetViewport,getViewport:()=>({...viewport}),enterPresentation,exitPresentation,getPresentation:()=>({active:presentation.active,native:presentation.native,pending:presentation.pending,exiting:presentation.exiting})};
+  reset(15,false);
+})();
