@@ -75,3 +75,7 @@ body.tv-mode{overflow:hidden}
 .board-section.is-tv-mode .pen-options .board-hint{flex-basis:100%;margin:0}
 @media(max-width:700px){.tv-tools{order:3;flex-basis:100%}.tv-title{flex-basis:100px}.tv-tools button{min-height:38px;font-size:11px;padding:5px 8px}}
 @media(max-width:600px){.board-section>.controls{grid-template-columns:repeat(4,minmax(0,1fr))}.controls button{font-size:12px}.pen-options{padding:8px}.pen-settings{gap:8px}.pen-settings>label:first-child{font-size:11px;gap:5px}.pen-settings button{font-size:10px;padding:7px}.pen-options .board-hint{font-size:10px}}
+/* Safari must not select nearby labels while a finger draws several strokes.
+   Text fields keep native caret, selection and copy/paste behaviour. */
+.board-section,.board-section *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.board-section input,.board-section textarea,.board-section [contenteditable=true],.board-section [contenteditable=plaintext-only]{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}

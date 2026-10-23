@@ -1,4 +1,4 @@
-/* Rugby tactics board v6: model-based freehand ink, viewport and TV presentation. */
+/* Rugby tactics board v6.1: freehand ink with native touch/selection guards. */
 (() => {
   'use strict';
   const canvas = document.getElementById('board');
@@ -32,6 +32,21 @@
   let inkNotice = '';
   function changed(reason) {
     canvas.dispatchEvent(new CustomEvent('boardchange',{detail:{reason}}));
+  }
+  function selectionElement(node){return node?.closest?node:node?.parentElement;}
+  function isTextControl(node){
+    const element=selectionElement(node);
+    return !!element&&(element.isContentEditable||['input','textarea','select'].some(tag=>element.closest?.(tag)));
+  }
+  function clearDrawingSelection(){
+    const selection=window.getSelection?.();
+    if(!selection||selection.isCollapsed)return;
+    const inDrawingUI=node=>{const element=selectionElement(node);return element?.closest?.('.board-section')===boardSection&&!isTextControl(element);};
+    if(inDrawingUI(selection.anchorNode)||inDrawingUI(selection.focusNode))selection.removeAllRanges();
+  }
+  function preventNativeDrawingGesture(e){
+    if(e.cancelable!==false)e.preventDefault();
+    clearDrawingSelection();
   }
 
   // Derive height from layout width only. Mobile browser toolbars change the
@@ -472,6 +487,9 @@
   }
   function onPointerDown(e) {
     if(e.pointerType==='mouse'&&e.button!==0)return;
+    // Cancel native selection before layout/capture work, including the next
+    // stroke after lifting a finger. Pointer Events still drive the drawing.
+    preventNativeDrawingGesture(e);
     if(!fit())return;
     pointers.set(e.pointerId,rawPointer(e));canvas.setPointerCapture(e.pointerId);
     if(pointers.size===2){startGesture();e.preventDefault();return;}
@@ -552,6 +570,13 @@
   canvas.addEventListener('pointerdown',onPointerDown);
   canvas.addEventListener('pointermove',onPointerMove);
   canvas.addEventListener('pointerup',finishInteraction);
+  // iPad Safari may start text selection/callouts independently of Pointer
+  // Events. Non-passive Touch Events cancel that native action on the canvas
+  // while our Pointer Events continue to handle drawing and two-finger zoom.
+  for(const name of ['touchstart','touchmove','gesturestart','gesturechange'])canvas.addEventListener(name,preventNativeDrawingGesture,{passive:false});
+  canvas.addEventListener('dragstart',e=>e.preventDefault());
+  boardSection?.addEventListener('selectstart',e=>{if(!isTextControl(e.target)&&e.cancelable!==false)e.preventDefault();},true);
+  document.addEventListener('selectionchange',()=>{if(pointers.size||interaction||gesture)clearDrawingSelection();});
   const pointerCancelled=e=>{pointers.delete(e.pointerId);if(gesture){if(!pointers.size)gesture=null;return;}cancelInteraction(e);};
   canvas.addEventListener('pointercancel',pointerCancelled);
   canvas.addEventListener('lostpointercapture',pointerCancelled);
@@ -614,7 +639,9 @@
     if($('boardHint'))$('boardHint').textContent=['pen','inkErase'].includes(state.tool)?(inkNotice||penHint):state.tool==='erase'?'消したい矢印をタップ。「戻る」で取り消せます。':state.tool==='arrow'?'ドラッグで矢印。2本指で拡大・移動できます。':state.tool==='ball'?'ボールをドラッグ、または置きたい場所をタップ。':'選手をドラッグ。2本指で盤面を拡大・移動。盤面の外でページをスクロール。';
   }
   function setTool(t) {
-    cancelInteraction();inkNotice='';state.tool=['arrow','ball','erase','pen','inkErase'].includes(t)?t:'move';syncUI();redraw();
+    cancelInteraction();inkNotice='';state.tool=['arrow','ball','erase','pen','inkErase'].includes(t)?t:'move';
+    if(['pen','inkErase'].includes(state.tool))clearDrawingSelection();
+    syncUI();redraw();
   }
   function setArrowColor(value) {
     state.arrowColor=color(value);syncUI();redraw();
